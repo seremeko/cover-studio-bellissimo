@@ -1320,6 +1320,16 @@ SIDEBAR_HTML = f"""
 <div class="status-box">
     <div class="status-label">NOW PLAYING</div>
     <div>cozy vocaloid playlist</div>
+    <iframe
+        width="100%"
+        height="112"
+        src="https://www.youtube.com/embed/videoseries?list=PLsSp13RQa9acoejdBMgYNciIx6_2NHKX8"
+        title="Now Playing Playlist"
+        frameborder="0"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowfullscreen
+        style="border: 1.5px solid #f29ec0; margin: 6px 0 8px 0; display: block; background: #fff4f8;">
+    </iframe>
     <div class="status-label">LOCAL MODELS</div>
     <div>{len(INITIAL_LABELS)} voices ready</div>
     <div class="status-label">MOOD</div>
@@ -1579,6 +1589,62 @@ FORCE_LIGHT_HEAD = """
         let lastPointerX = 0;
         let lastPointerY = 0;
         let tilt = 0;
+        let audioCtx = null;
+        let lastSoundTime = 0;
+
+        function playGumiImpactSound(intensity) {
+            const nowMs = performance.now();
+            if (nowMs - lastSoundTime < 350) return;
+            lastSoundTime = nowMs;
+            try {
+                if (!audioCtx) {
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    if (!Ctx) return;
+                    audioCtx = new Ctx();
+                }
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+
+                const t = audioCtx.currentTime;
+                // Formant-filtered cute Vocaloid squeak + comedic censor bleep
+                const osc = audioCtx.createOscillator();
+                const filter = audioCtx.createBiquadFilter();
+                const gain = audioCtx.createGain();
+
+                osc.type = 'sawtooth';
+                const baseF = 520 + Math.min(260, intensity * 18);
+                osc.frequency.setValueAtTime(baseF, t);
+                osc.frequency.exponentialRampToValueAtTime(baseF * 1.35, t + 0.07);
+                osc.frequency.exponentialRampToValueAtTime(baseF * 0.72, t + 0.16);
+
+                filter.type = 'bandpass';
+                filter.frequency.setValueAtTime(1450, t);
+                filter.Q.setValueAtTime(4.5, t);
+
+                gain.gain.setValueAtTime(0.001, t);
+                gain.gain.linearRampToValueAtTime(0.16, t + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+
+                osc.connect(filter);
+                filter.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(t);
+                osc.stop(t + 0.19);
+
+                // Comedic censor bleep right after impact
+                const bleep = audioCtx.createOscillator();
+                const bGain = audioCtx.createGain();
+                bleep.type = 'sine';
+                bleep.frequency.setValueAtTime(1000, t + 0.14);
+                bGain.gain.setValueAtTime(0.001, t + 0.14);
+                bGain.gain.linearRampToValueAtTime(0.11, t + 0.16);
+                bGain.gain.setValueAtTime(0.11, t + 0.34);
+                bGain.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+                bleep.connect(bGain);
+                bGain.connect(audioCtx.destination);
+                bleep.start(t + 0.14);
+                bleep.stop(t + 0.39);
+            } catch (err) {}
+        }
 
         function floorY() {
             return Math.max(0, window.innerHeight - H - 6);
@@ -1650,6 +1716,7 @@ FORCE_LIGHT_HEAD = """
                     if (y >= fy) {
                         y = fy;
                         if (Math.abs(vy) > 3.2) {
+                            playGumiImpactSound(Math.abs(vy));
                             vy = -vy * 0.35; // soft bounce
                         } else {
                             vy = 0;
@@ -1663,10 +1730,12 @@ FORCE_LIGHT_HEAD = """
                 }
 
                 if (x <= 0) {
+                    if (Math.abs(vx) > 2.8) playGumiImpactSound(Math.abs(vx));
                     x = 0;
                     dir = 1;
                     vx = Math.abs(vx) || 1.15;
                 } else if (x >= window.innerWidth - W) {
+                    if (Math.abs(vx) > 2.8) playGumiImpactSound(Math.abs(vx));
                     x = window.innerWidth - W;
                     dir = -1;
                     vx = -(Math.abs(vx) || 1.15);

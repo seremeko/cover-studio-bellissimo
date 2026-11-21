@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+venv/
+.venv/
+env/
+
+# Audio, Output & Separated Stems
+output/
+separated/
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+
+# RVC Models & Weights
+models/
+*.pth
+*.index
+*.onnx
+*.safetensors
+*.bin
+*.zip
+
+# Logs, Cache & OS
+*.log
+.cache/
+.gradio/
+flagged/
+.env
+.DS_Store
+Thumbs.db

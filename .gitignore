@@ -1,0 +1,46 @@
+# Python & Virtual Environment
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+
+# Already-made songs, Audio & Stems
+output/
+AI_Cover_Studio/output/
+separated/
+Alle_Donne_Piacciono_Teto_Miku/
+Cantarella_Definitivo/
+Magnet_Pandetta_Miku/
+Simme_Nuje_Miku/
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+
+# RVC Models, Weights & Large Binaries
+models/
+rvc_cli/rvc/models/
+rvc_cli/logs/
+rvc_cli/assets/audios/
+rvc_cli/assets/datasets/
+*.pth
+*.index
+*.pt
+*.bin
+*.onnx
+*.safetensors
+*.zip
+*.exe
+
+# Logs, Cache & OS
+*.log
+.cache/
+.gradio/
+flagged/
+.env
+.DS_Store
+Thumbs.db

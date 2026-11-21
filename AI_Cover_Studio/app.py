@@ -1026,6 +1026,10 @@ gradio-app, main, .app {{
     background-color: transparent !important;
 }}
 
+footer {{
+    display: none !important;
+}}
+
 .gradio-container {{
     max-width: 1020px !important;
     margin: 18px auto 70px auto !important;

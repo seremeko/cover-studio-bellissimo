@@ -991,7 +991,7 @@ CUSTOM_CSS = f"""
 
 :root, .dark {{
     color-scheme: light !important;
-    --body-background-fill: #a8e8fb !important;
+    --body-background-fill: transparent !important;
     --background-fill-primary: #fffdfd !important;
     --background-fill-secondary: #fff7fa !important;
     --block-background-fill: #fffdfd !important;
@@ -1010,8 +1010,8 @@ CUSTOM_CSS = f"""
     --slider-color: #f29ec0 !important;
 }}
 
-body, .gradio-container {{
-    background-color: #a8e8fb !important;
+html, body {{
+    background-color: transparent !important;
     background-image: url("{BG_SKY_URI}") !important;
     background-size: cover !important;
     background-position: center bottom !important;
@@ -1021,13 +1021,21 @@ body, .gradio-container {{
     color: #6b3b5b !important;
 }}
 
+gradio-app, main, .app {{
+    background: transparent !important;
+    background-color: transparent !important;
+}}
+
 .gradio-container {{
     max-width: 1020px !important;
     margin: 18px auto 70px auto !important;
     padding: 0 !important;
     background: transparent !important;
+    background-color: transparent !important;
     border: none !important;
     box-shadow: none !important;
+    font-family: "Verdana", "Trebuchet MS", sans-serif !important;
+    color: #6b3b5b !important;
 }}
 
 /* Top Journal Header Card */
@@ -1333,133 +1341,39 @@ HEADER_HTML = """
 </div>
 """
 
-PLAYLIST_URL = "https://www.youtube.com/playlist?list=PLsSp13RQa9acoejdBMgYNciIx6_2NHKX8"
-PLAYLIST_CACHE_PATH = os.path.join(APP_DIR, "assets", "playlist_cache.json")
-
-
-def get_playlist_tracks() -> list[dict[str, str]]:
-    if os.path.exists(PLAYLIST_CACHE_PATH):
-        try:
-            with open(PLAYLIST_CACHE_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list) and data:
-                    return data
-        except Exception:
-            pass
-
-    proc = subprocess.run(
-        [YT_DLP_EXE, "--flat-playlist", "--print", "%(id)s\t%(title)s", PLAYLIST_URL],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=True,
-    )
-    tracks = []
-    for line in proc.stdout.splitlines():
-        if "\t" in line:
-            vid, title = line.split("\t", 1)
-            vid = vid.strip()
-            title = title.strip()
-            if vid and title and title != "[Private video]" and title != "[Deleted video]":
-                tracks.append({"id": vid, "title": title})
-    if tracks:
-        try:
-            with open(PLAYLIST_CACHE_PATH, "w", encoding="utf-8") as f:
-                json.dump(tracks, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-    return tracks
-
-
-def play_playlist_track(action: str, current_idx: int):
-    try:
-        tracks = get_playlist_tracks()
-    except Exception as e:
-        return current_idx, f'<div class="mini-pl-box">errore playlist: {html.escape(str(e))}</div>'
-
-    if not tracks:
-        return 0, '<div class="mini-pl-box">playlist vuota</div>'
-
-    n = len(tracks)
-    if action == "next":
-        idx = (current_idx + 1) % n
-    elif action == "prev":
-        idx = (current_idx - 1) % n
-    elif action == "rand":
-        idx = random.randrange(n)
-    else:
-        idx = current_idx % n
-
-    track = tracks[idx]
-    vid = track["id"]
-    title = html.escape(track["title"])
-    watch_url = f"https://www.youtube.com/watch?v={vid}"
-
-    try:
-        proc = subprocess.run(
-            [YT_DLP_EXE, "-f", "bestaudio[ext=m4a]/bestaudio", "--no-playlist", "-g", watch_url],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        stream_url = proc.stdout.strip().splitlines()[0]
-    except Exception:
-        return idx, (
-            f'<div class="mini-pl-box">'
-            f'<div class="mini-pl-title">{idx+1}/{n} - {title}</div>'
-            f'<div style="font-size:10px;color:#b0416e;">traccia non riproducibile, premi &gt;|</div>'
-            f'</div>'
-        )
-
-    player_html = f"""
-    <div class="mini-pl-box">
-        <div class="mini-pl-title">{idx + 1}/{n} // {title}</div>
-        <audio controls autoplay style="width: 100%; height: 28px; margin-top: 4px;">
-            <source src="{html.escape(stream_url)}" type="audio/mp4">
-        </audio>
-        <div style="margin-top: 3px;">
-            <a href="{PLAYLIST_URL}" target="_blank" rel="noopener noreferrer" style="font-size: 10px; color: #9e4374; text-decoration: underline;">apri playlist su youtube</a>
-        </div>
-    </div>
-    """
-    return idx, player_html
-
-
-SIDEBAR_TOP_HTML = """
+SIDEBAR_HTML = f"""
 <div class="sidebar-heading">ABOUT</div>
 <p class="sidebar-text">
-    hi! welcome to ai cover studio. drop a youtube link or song title and turn it into a vocaloid or custom rvc v2 cover.
+    ciao! sono <b>Meko</b> e questo e il mio studio personale di <b>AI Cover</b>.
+    nasce per creare cover Vocaloid e personalizzate in locale senza passare da servizi online.
 </p>
 
-<div class="sidebar-heading">MEMOS</div>
+<div class="sidebar-heading">HOW IT WORKS</div>
 <ul class="sidebar-list">
-    <li>* demucs htdemucs stems</li>
-    <li>* rvc v2 rmvpe inference</li>
-    <li>* f0 duet gender split</li>
-    <li>* warm plate reverb mix</li>
+    <li>1. incolla un titolo o url youtube (<code>yt-dlp</code> scarica il wav).</li>
+    <li>2. <code>demucs</code> separa voce e base strumentale.</li>
+    <li>3. in duetto, <code>pyworld</code> divide voce maschile e femminile via F0.</li>
+    <li>4. <code>rvc v2 (rmvpe)</code> converte il timbro vocale.</li>
+    <li>5. <code>pedalboard</code> + <code>ffmpeg</code> mixano in mp3 320 kbps.</li>
+</ul>
+
+<div class="sidebar-heading">MADE WITH</div>
+<ul class="sidebar-list">
+    <li>* python + gradio</li>
+    <li>* rvc_cli + htdemucs</li>
+    <li>* pyworld + pydub</li>
+    <li>* pedalboard + ffmpeg</li>
+    <li>* hugging face hub</li>
 </ul>
 
 <div class="sidebar-heading">STATUS</div>
-<div class="status-box" style="padding-bottom: 6px;">
-    <div class="status-label">NOW PLAYING</div>
-"""
-
-INITIAL_MINI_PLAYER_HTML = f"""
-    <div class="mini-pl-box">
-        <div class="mini-pl-title">cozy playlist (premi play!)</div>
-        <div style="margin-top: 3px;">
-            <a href="{PLAYLIST_URL}" target="_blank" rel="noopener noreferrer" style="font-size: 10px; color: #9e4374; text-decoration: underline;">apri playlist su youtube</a>
-        </div>
-    </div>
-"""
-
-SIDEBAR_BOTTOM_HTML = f"""
-<div class="status-box" style="margin-top: 0; border-top: none; padding-top: 4px;">
+<div class="status-box">
+    <div class="status-label">WEBMASTER</div>
+    <div>meko</div>
     <div class="status-label">LOCAL MODELS</div>
     <div>{len(INITIAL_LABELS)} voices ready</div>
-    <div class="status-label">MOOD</div>
-    <div>sleepy but inspired</div>
+    <div class="status-label">ENGINE</div>
+    <div>cpu optimized (rmvpe)</div>
 </div>
 """
 
@@ -1476,15 +1390,7 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
 
     with gr.Row(equal_height=False):
         with gr.Column(scale=1, min_width=240, elem_classes=["journal-sidebar"]):
-            playlist_idx_state = gr.State(0)
-            gr.HTML(SIDEBAR_TOP_HTML)
-            mini_player_html = gr.HTML(INITIAL_MINI_PLAYER_HTML)
-            with gr.Row(elem_classes=["mini-pl-btns"]):
-                pl_prev_btn = gr.Button("|<", size="sm", variant="secondary", scale=1)
-                pl_play_btn = gr.Button("play", size="sm", variant="primary", scale=2)
-                pl_next_btn = gr.Button(">|", size="sm", variant="secondary", scale=1)
-                pl_rand_btn = gr.Button("rnd", size="sm", variant="secondary", scale=1)
-            gr.HTML(SIDEBAR_BOTTOM_HTML)
+            gr.HTML(SIDEBAR_HTML)
 
         with gr.Column(scale=3, elem_classes=["journal-main"]):
             gr.HTML(
@@ -1640,28 +1546,6 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
         fn=lambda p: gr.update(visible=(p == "Manuale")),
         inputs=[pitch2_mode],
         outputs=[pitch2_manual],
-    )
-
-    # Playlist mini-player actions
-    pl_play_btn.click(
-        fn=lambda idx: play_playlist_track("play", idx),
-        inputs=[playlist_idx_state],
-        outputs=[playlist_idx_state, mini_player_html],
-    )
-    pl_prev_btn.click(
-        fn=lambda idx: play_playlist_track("prev", idx),
-        inputs=[playlist_idx_state],
-        outputs=[playlist_idx_state, mini_player_html],
-    )
-    pl_next_btn.click(
-        fn=lambda idx: play_playlist_track("next", idx),
-        inputs=[playlist_idx_state],
-        outputs=[playlist_idx_state, mini_player_html],
-    )
-    pl_rand_btn.click(
-        fn=lambda idx: play_playlist_track("rand", idx),
-        inputs=[playlist_idx_state],
-        outputs=[playlist_idx_state, mini_player_html],
     )
 
     # Actions

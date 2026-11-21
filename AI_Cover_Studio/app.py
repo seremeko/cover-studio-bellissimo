@@ -1323,13 +1323,17 @@ SIDEBAR_HTML = f"""
     <iframe
         width="100%"
         height="112"
-        src="https://www.youtube.com/embed/videoseries?list=PLsSp13RQa9acoejdBMgYNciIx6_2NHKX8"
+        src="https://www.youtube.com/embed/89hnFfoedfA?list=PLsSp13RQa9acoejdBMgYNciIx6_2NHKX8"
         title="Now Playing Playlist"
         frameborder="0"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
         allowfullscreen
-        style="border: 1.5px solid #f29ec0; margin: 6px 0 8px 0; display: block; background: #fff4f8;">
+        style="border: 1.5px solid #f29ec0; margin: 6px 0 4px 0; display: block; background: #fff4f8;">
     </iframe>
+    <div style="margin-bottom: 6px;">
+        <a href="https://youtube.com/playlist?list=PLsSp13RQa9acoejdBMgYNciIx6_2NHKX8" target="_blank" rel="noopener noreferrer" style="font-size: 10px; color: #9e4374; text-decoration: underline;">apri playlist su youtube</a>
+    </div>
     <div class="status-label">LOCAL MODELS</div>
     <div>{len(INITIAL_LABELS)} voices ready</div>
     <div class="status-label">MOOD</div>

@@ -966,6 +966,7 @@ def _load_data_uri(filename: str, mime: str = "image/gif") -> str:
 
 BG_SKY_URI = _load_data_uri("bg_sky.png", "image/png")
 GUMI_SPRITE_URI = _load_data_uri("sprite_gumi.png", "image/png")
+LUCKY_STAR_URI = _load_data_uri("lucky_star_3.gif", "image/gif")
 
 CUSTOM_CSS = f"""
 @keyframes sprite-hop {{
@@ -1044,16 +1045,28 @@ footer {{
 
 /* Top Journal Header Card */
 .journal-header {{
-    background: #fffdfd;
+    background: #ffccee;
     border: 2px solid #f29ec0;
     box-shadow: 4px 4px 0px rgba(242, 158, 192, 0.55);
-    padding: 16px 22px;
+    padding: 6px 22px;
     margin-bottom: 14px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
     gap: 12px;
+}}
+
+.journal-header-gif {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}}
+
+.journal-header-gif img {{
+    height: 76px;
+    width: auto;
+    display: block;
 }}
 
 .journal-title {{
@@ -1331,11 +1344,14 @@ button:active {{
 }}
 """
 
-HEADER_HTML = """
+HEADER_HTML = f"""
 <div class="journal-header">
     <div>
         <div class="journal-title">ai cover studio</div>
         <p class="journal-subtitle">little vocaloid covers, rvc v2 models, and cozy mixes.</p>
+    </div>
+    <div class="journal-header-gif">
+        <img src="{LUCKY_STAR_URI}" alt="Lucky Star" />
     </div>
     <div class="journal-header-right">
         <svg width="54" height="44" viewBox="0 0 54 44" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">

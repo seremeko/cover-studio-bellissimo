@@ -684,6 +684,45 @@ def search_rvc_models(character_name: str, progress=gr.Progress()):
     except Exception as e:
         yield log(f"[AVVISO GitHub] {e}"), candidates, gr.update(), gr.update()
 
+    # 3. Voice-Models.com
+    progress(0.88, desc="Ricerca su Voice-Models.com...")
+    try:
+        vm_q = urllib.parse.quote(query_raw)
+        req = urllib.request.Request(
+            f"https://voice-models.com/fetch_data.php?search={vm_q}",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            vm_data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        tbl = vm_data.get("table", "")
+        vm_count = 0
+        for row in tbl.split("<tr>")[1:]:
+            t_m = re.search(r"class=['\"]fs-5['\"]>([^<]+)</a>", row)
+            u_m = re.search(r"easyaivoice\.com/run\?url=([^'\"&\s]+)", row)
+            if not (t_m and u_m):
+                continue
+            title = html.unescape(t_m.group(1)).strip()
+            dl_url = urllib.parse.unquote(u_m.group(1))
+            if "huggingface.co/" in dl_url and "/blob/" in dl_url:
+                dl_url = dl_url.replace("/blob/", "/resolve/")
+            if "drive.google.com" in dl_url:
+                continue
+            if not dl_url.startswith(("http://", "https://")):
+                continue
+            label = f"[Voice-Models] {title}"
+            if label not in candidates:
+                candidates[label] = {
+                    "source": "voice_models",
+                    "repo_id": title,
+                    "url": dl_url,
+                    "score": 5000 if query_raw.lower() in title.lower() else 500,
+                }
+                vm_count += 1
+            if vm_count >= 15:
+                break
+    except Exception as e:
+        yield log(f"[AVVISO Voice-Models] {e}"), candidates, gr.update(), gr.update()
+
     sorted_labels = sorted(
         candidates.keys(),
         key=lambda k: candidates[k].get("score", 0),
@@ -789,6 +828,16 @@ def confirm_download_model(
                 _download_url_to_file(pths[0]["url"], os.path.join(repo_dir, pths[0]["name"]))
                 if idxs:
                     _download_url_to_file(idxs[0]["url"], os.path.join(repo_dir, idxs[0]["name"]))
+        elif source == "voice_models":
+            dl_url = info["url"]
+            fname = os.path.basename(urllib.parse.urlparse(dl_url).path) or "model.zip"
+            if not fname.lower().endswith((".zip", ".pth")):
+                fname += ".zip"
+            dst = os.path.join(repo_dir, fname)
+            _download_url_to_file(dl_url, dst)
+            if dst.lower().endswith(".zip"):
+                with zipfile.ZipFile(dst, "r") as zf:
+                    zf.extractall(repo_dir)
     except Exception as e:
         shutil.rmtree(repo_dir, ignore_errors=True)
         yield log(f"[ERRORE DOWNLOAD] {e}"), gr.update(), gr.update()
@@ -1703,8 +1752,8 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                     hf_candidates_state = gr.State({})
                     with gr.Column(elem_classes=["journal-subbox"]):
                         gr.HTML(
-                            '<p style="font-size:12px;margin:0 0 8px 0;"><b>Step 1:</b> Cerca su <b>Hugging Face (Models &amp; Datasets)</b> '
-                            'e <b>GitHub</b>, poi seleziona il modello esatto prima di confermare il download.</p>'
+                            '<p style="font-size:12px;margin:0 0 8px 0;"><b>Step 1:</b> Cerca su <b>Hugging Face (Models &amp; Datasets)</b>, '
+                            '<b>Voice-Models.com</b> e <b>GitHub</b>, poi seleziona il modello esatto prima di confermare il download.</p>'
                         )
                         with gr.Row():
                             hf_name_input = gr.Textbox(

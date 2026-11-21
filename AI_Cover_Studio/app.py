@@ -13,6 +13,13 @@ import soundfile as sf
 import librosa
 import pyworld as pw
 import torch
+
+# Maximize PyTorch CPU parallelism
+try:
+    _cpu_n = os.cpu_count() or 4
+    torch.set_num_threads(_cpu_n)
+except Exception:
+    pass
 import ffmpeg
 import gradio as gr
 from pydub import AudioSegment
@@ -435,6 +442,93 @@ def run_rvc_inference(
         os.chdir(prev_cwd)
 
 
+def run_rvc_active_only(
+    input_wav: str,
+    output_wav: str,
+    pth_path: str,
+    index_path: str,
+    pitch: int,
+    index_rate: float,
+):
+    """
+    Runs RVC inference only on non-silent audio regions (merging gaps <= 1.2s)
+    and places the converted segments back into a full-length silent timeline
+    at their exact timestamps. Avoids wasting CPU time on silence.
+    """
+    seg = AudioSegment.from_wav(input_wav)
+    total_ms = len(seg)
+    if total_ms == 0:
+        seg.export(output_wav, format="wav")
+        return "Empty audio", output_wav
+
+    y, sr = sf.read(input_wav, always_2d=True)
+    y_mono = np.mean(y, axis=1)
+    win = max(1, int(sr * 0.05))  # 50ms windows
+    n_wins = len(y_mono) // win
+    if n_wins == 0:
+        return run_rvc_inference(input_wav, output_wav, pth_path, index_path, pitch, index_rate)
+
+    rms = np.sqrt(np.mean(y_mono[: n_wins * win].reshape(n_wins, win) ** 2, axis=1))
+    active = rms > 0.0015
+    if not np.any(active):
+        seg.export(output_wav, format="wav")
+        return "Silent track skipped", output_wav
+
+    raw_intervals = []
+    i = 0
+    while i < len(active):
+        if not active[i]:
+            i += 1
+            continue
+        s = i
+        while i < len(active) and active[i]:
+            i += 1
+        s_ms = max(0, s * 50 - 250)
+        e_ms = min(total_ms, i * 50 + 250)
+        raw_intervals.append([s_ms, e_ms])
+
+    merged = []
+    for s_ms, e_ms in raw_intervals:
+        if not merged or s_ms - merged[-1][1] > 1200:
+            merged.append([s_ms, e_ms])
+        else:
+            merged[-1][1] = max(merged[-1][1], e_ms)
+
+    active_ms = sum(e - s for s, e in merged)
+    # If >85% of the track is active, run directly on the whole file
+    if active_ms >= total_ms * 0.85:
+        return run_rvc_inference(input_wav, output_wav, pth_path, index_path, pitch, index_rate)
+
+    base_dir = os.path.dirname(output_wav)
+    timeline = AudioSegment.silent(
+        duration=total_ms,
+        frame_rate=seg.frame_rate,
+    ).set_channels(seg.channels).set_sample_width(seg.sample_width)
+
+    last_msg = "OK"
+    for idx, (s_ms, e_ms) in enumerate(merged):
+        tmp_in = os.path.join(base_dir, f"_tmp_chunk_in_{idx}.wav")
+        tmp_out = os.path.join(base_dir, f"_tmp_chunk_out_{idx}.wav")
+        try:
+            seg[s_ms:e_ms].export(tmp_in, format="wav")
+            last_msg, _ = run_rvc_inference(tmp_in, tmp_out, pth_path, index_path, pitch, index_rate)
+            if os.path.exists(tmp_out):
+                conv = AudioSegment.from_wav(tmp_out)
+                if len(conv) > 40:
+                    conv = conv.fade_in(20).fade_out(20)
+                timeline = timeline.overlay(conv, position=s_ms)
+        finally:
+            for p in (tmp_in, tmp_out):
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+
+    timeline.export(output_wav, format="wav")
+    return f"{last_msg} (active {active_ms/1000:.1f}s / {total_ms/1000:.1f}s)", output_wav
+
+
 # ---------------------------------------------------------------------------
 # Hugging Face Model Search & Download
 # ---------------------------------------------------------------------------
@@ -622,53 +716,65 @@ def generate_cover(
     original_wav = os.path.join(work_dir, "original.wav")
 
     yield log(f"[STEP 1/5] Cartella di lavoro: {work_dir}"), None
-    if os.path.exists(original_wav):
-        os.remove(original_wav)
-
-    dl_cmd = [
-        YT_DLP_EXE,
-        "--ffmpeg-location", FFMPEG_DIR if os.path.isdir(FFMPEG_DIR) else os.path.dirname(FFMPEG_EXE),
-        "--no-playlist",
-        "-x",
-        "--audio-format", "wav",
-        "-o", os.path.join(work_dir, "original.%(ext)s"),
-        yt_target,
-    ]
-    subprocess.run(dl_cmd, check=True)
-    if not os.path.exists(original_wav):
-        yield log("[ERRORE] Download WAV fallito: original.wav non trovato."), None
-        return
-    yield log(f"[STEP 1/5] Download completato: original.wav ({os.path.getsize(original_wav)/(1024*1024):.2f} MB)"), None
+    if os.path.exists(original_wav) and os.path.getsize(original_wav) > 10240:
+        yield log(f"[STEP 1/5] Cache trovata: uso original.wav già presente ({os.path.getsize(original_wav)/(1024*1024):.2f} MB)"), None
+    else:
+        if os.path.exists(original_wav):
+            os.remove(original_wav)
+        dl_cmd = [
+            YT_DLP_EXE,
+            "--ffmpeg-location", FFMPEG_DIR if os.path.isdir(FFMPEG_DIR) else os.path.dirname(FFMPEG_EXE),
+            "--no-playlist",
+            "-x",
+            "--audio-format", "wav",
+            "-o", os.path.join(work_dir, "original.%(ext)s"),
+            yt_target,
+        ]
+        subprocess.run(dl_cmd, check=True)
+        if not os.path.exists(original_wav):
+            yield log("[ERRORE] Download WAV fallito: original.wav non trovato."), None
+            return
+        yield log(f"[STEP 1/5] Download completato: original.wav ({os.path.getsize(original_wav)/(1024*1024):.2f} MB)"), None
 
     # -----------------------------------------------------------------------
     # STEP 2: Demucs separation (htdemucs, --two-stems=vocals)
     # -----------------------------------------------------------------------
-    progress(0.25, desc="Step 2/5: Separazione voce e base con Demucs...")
-    yield log("[STEP 2/5] Avvio Demucs (htdemucs --two-stems=vocals)..."), None
-
-    sep_out_dir = os.path.join(work_dir, "separated")
-    demucs_cmd = [
-        DEMUCS_EXE,
-        "--two-stems=vocals",
-        "-n", "htdemucs",
-        "-o", sep_out_dir,
-        original_wav,
-    ]
-    subprocess.run(demucs_cmd, check=True)
-
     vocals_wav = os.path.join(work_dir, "vocals.wav")
     inst_wav = os.path.join(work_dir, "instrumental.wav")
-    demucs_track_dir = os.path.join(sep_out_dir, "htdemucs", "original")
-    src_vocals = os.path.join(demucs_track_dir, "vocals.wav")
-    src_novocals = os.path.join(demucs_track_dir, "no_vocals.wav")
 
-    if not os.path.exists(src_vocals) or not os.path.exists(src_novocals):
-        yield log("[ERRORE] Output Demucs non trovato."), None
-        return
+    if (
+        os.path.exists(vocals_wav) and os.path.getsize(vocals_wav) > 10240
+        and os.path.exists(inst_wav) and os.path.getsize(inst_wav) > 10240
+    ):
+        progress(0.45, desc="Step 2/5: Stem Demucs già in cache!")
+        yield log("[STEP 2/5] Cache trovata: salto Demucs e uso vocals.wav + instrumental.wav già estratti!"), None
+    else:
+        progress(0.25, desc="Step 2/5: Separazione voce e base con Demucs...")
+        cpu_jobs = str(os.cpu_count() or 4)
+        yield log(f"[STEP 2/5] Avvio Demucs (htdemucs --two-stems=vocals, -j {cpu_jobs})..."), None
 
-    shutil.copy2(src_vocals, vocals_wav)
-    shutil.copy2(src_novocals, inst_wav)
-    yield log("[STEP 2/5] Separazione completata: vocals.wav + instrumental.wav"), None
+        sep_out_dir = os.path.join(work_dir, "separated")
+        demucs_cmd = [
+            DEMUCS_EXE,
+            "--two-stems=vocals",
+            "-n", "htdemucs",
+            "-j", cpu_jobs,
+            "-o", sep_out_dir,
+            original_wav,
+        ]
+        subprocess.run(demucs_cmd, check=True)
+
+        demucs_track_dir = os.path.join(sep_out_dir, "htdemucs", "original")
+        src_vocals = os.path.join(demucs_track_dir, "vocals.wav")
+        src_novocals = os.path.join(demucs_track_dir, "no_vocals.wav")
+
+        if not os.path.exists(src_vocals) or not os.path.exists(src_novocals):
+            yield log("[ERRORE] Output Demucs non trovato."), None
+            return
+
+        shutil.copy2(src_vocals, vocals_wav)
+        shutil.copy2(src_novocals, inst_wav)
+        yield log("[STEP 2/5] Separazione completata: vocals.wav + instrumental.wav"), None
 
     # -----------------------------------------------------------------------
     # STEP 3 & 4: Optional Duet F0 Split + Pure RVC Inference
@@ -684,7 +790,7 @@ def generate_cover(
         yield log(f"[STEP 4/5] RVC Voce Principale ({voice1_label}) | Pitch: {p1_desc} | Index Rate: {index_rate}"), None
 
         rvc_out_1 = os.path.join(work_dir, "rvc_voice1.wav")
-        msg1, _ = run_rvc_inference(
+        msg1, _ = run_rvc_active_only(
             input_wav=vocals_wav,
             output_wav=rvc_out_1,
             pth_path=v1_info["pth"],
@@ -712,7 +818,7 @@ def generate_cover(
         p1, p1_desc = resolve_pitch(pitch1_mode, pitch1_manual, male_wav, voice1_label)
         yield log(f"[STEP 4A/5] RVC Voce Principale ({voice1_label}) | Pitch: {p1_desc}"), None
         rvc_out_1 = os.path.join(work_dir, "rvc_voice1.wav")
-        msg1, _ = run_rvc_inference(
+        msg1, _ = run_rvc_active_only(
             input_wav=male_wav,
             output_wav=rvc_out_1,
             pth_path=v1_info["pth"],
@@ -731,7 +837,7 @@ def generate_cover(
             progress(0.75, desc="Step 4/5: Inferenza RVC Seconda Voce (traccia femminile)...")
             p2, p2_desc = resolve_pitch(pitch2_mode, pitch2_manual, female_wav, voice2_label)
             yield log(f"[STEP 4B/5] RVC Seconda Voce ({voice2_label}) | Pitch: {p2_desc}"), None
-            msg2, _ = run_rvc_inference(
+            msg2, _ = run_rvc_active_only(
                 input_wav=female_wav,
                 output_wav=rvc_out_2,
                 pth_path=v2_info["pth"],
@@ -1137,12 +1243,21 @@ button:active {{
 
 .vocaloid-walker {{
     position: fixed;
-    bottom: 4px;
-    width: 42px;
-    opacity: 0.94;
+    left: 40px;
+    top: 0px;
+    width: 44px;
+    opacity: 0.96;
+    pointer-events: auto;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+    will-change: transform;
 }}
 
-.walk-gumi  {{ animation: sprite-roam-lr 26s linear infinite; animation-delay: 0s; }}
+.vocaloid-walker.dragging {{
+    cursor: grabbing;
+}}
 
 .chibi-pixel-sprite {{
     width: 44px;
@@ -1150,7 +1265,17 @@ button:active {{
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     display: block;
+    pointer-events: none;
     animation: sprite-hop 0.55s ease-in-out infinite;
+}}
+
+.vocaloid-walker.dragging .chibi-pixel-sprite {{
+    animation: none;
+}}
+
+.vocaloid-walker.happy-spin .chibi-pixel-sprite {{
+    transition: transform 0.38s ease;
+    transform: rotate(360deg) scale(1.15);
 }}
 """
 
@@ -1204,7 +1329,9 @@ SIDEBAR_HTML = f"""
 
 CHIBI_STAGE_HTML = f"""
 <div class="chibi-stage" aria-hidden="true">
-    <div class="vocaloid-walker walk-gumi"><img class="chibi-pixel-sprite" src="{GUMI_SPRITE_URI}" alt="GUMI" /></div>
+    <div id="gumi-pet" class="vocaloid-walker" title="GUMI">
+        <img class="chibi-pixel-sprite" src="{GUMI_SPRITE_URI}" alt="GUMI" draggable="false" />
+    </div>
 </div>
 """
 
@@ -1431,6 +1558,133 @@ FORCE_LIGHT_HEAD = """
     stripDark();
     new MutationObserver(stripDark).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     window.addEventListener('DOMContentLoaded', stripDark);
+
+    // Interactive Shimeji-style GUMI pet
+    function initGumiPet() {
+        const pet = document.getElementById('gumi-pet');
+        if (!pet || pet.dataset.bound === '1') return;
+        pet.dataset.bound = '1';
+
+        const W = 44;
+        const H = 50;
+        let x = 60;
+        let y = Math.max(0, window.innerHeight - H - 6);
+        let vx = 1.15;
+        let vy = 0;
+        let dir = 1;
+        let dragging = false;
+        let movedDuringDrag = false;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+        let lastPointerX = 0;
+        let lastPointerY = 0;
+        let tilt = 0;
+
+        function floorY() {
+            return Math.max(0, window.innerHeight - H - 6);
+        }
+
+        pet.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            dragging = true;
+            movedDuringDrag = false;
+            pet.classList.add('dragging');
+            pet.setPointerCapture(e.pointerId);
+            dragOffsetX = e.clientX - x;
+            dragOffsetY = e.clientY - y;
+            lastPointerX = e.clientX;
+            lastPointerY = e.clientY;
+            vx = 0;
+            vy = 0;
+        });
+
+        pet.addEventListener('pointermove', (e) => {
+            if (!dragging) return;
+            const dx = e.clientX - lastPointerX;
+            const dy = e.clientY - lastPointerY;
+            if (Math.abs(dx) > 2 || Math.abs(dy) > 2) movedDuringDrag = true;
+            x = Math.min(window.innerWidth - W, Math.max(0, e.clientX - dragOffsetX));
+            y = Math.min(floorY(), Math.max(0, e.clientY - dragOffsetY));
+            vx = dx * 0.45;
+            vy = dy * 0.45;
+            if (Math.abs(dx) > 1) dir = dx >= 0 ? 1 : -1;
+            tilt = Math.max(-22, Math.min(22, dx * 1.4));
+            lastPointerX = e.clientX;
+            lastPointerY = e.clientY;
+        });
+
+        function releasePet(e) {
+            if (!dragging) return;
+            dragging = false;
+            pet.classList.remove('dragging');
+            tilt = 0;
+            if (!movedDuringDrag) {
+                // Click / pet: happy jump & spin!
+                vy = -8.5;
+                vx = dir * 1.5;
+                pet.classList.remove('happy-spin');
+                void pet.offsetWidth;
+                pet.classList.add('happy-spin');
+                setTimeout(() => pet.classList.remove('happy-spin'), 420);
+            }
+        }
+
+        pet.addEventListener('pointerup', releasePet);
+        pet.addEventListener('pointercancel', releasePet);
+
+        pet.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            vy = -11;
+            dir = -dir;
+            vx = dir * 2.2;
+        });
+
+        function tick() {
+            const fy = floorY();
+            if (!dragging) {
+                if (y < fy || vy < 0) {
+                    vy += 0.55; // gravity
+                    x += vx;
+                    y += vy;
+                    vx *= 0.985;
+                    if (y >= fy) {
+                        y = fy;
+                        if (Math.abs(vy) > 3.2) {
+                            vy = -vy * 0.35; // soft bounce
+                        } else {
+                            vy = 0;
+                            vx = dir * 1.15;
+                        }
+                    }
+                } else {
+                    y = fy;
+                    x += vx;
+                    if (Math.abs(vx) < 0.8) vx = dir * 1.15;
+                }
+
+                if (x <= 0) {
+                    x = 0;
+                    dir = 1;
+                    vx = Math.abs(vx) || 1.15;
+                } else if (x >= window.innerWidth - W) {
+                    x = window.innerWidth - W;
+                    dir = -1;
+                    vx = -(Math.abs(vx) || 1.15);
+                }
+            }
+
+            pet.style.left = '0px';
+            pet.style.top = '0px';
+            pet.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) scaleX(${dir}) rotate(${tilt.toFixed(1)}deg)`;
+            requestAnimationFrame(tick);
+        }
+
+        requestAnimationFrame(tick);
+    }
+
+    const observer = new MutationObserver(initGumiPet);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    window.addEventListener('DOMContentLoaded', initGumiPet);
 })();
 </script>
 """

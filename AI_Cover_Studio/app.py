@@ -1184,30 +1184,39 @@ gradio-app, main, .app {{
     background-color: #fffdfd !important;
     background-image: repeating-linear-gradient(
         to bottom,
-        transparent,
+        transparent 0px,
         transparent 27px,
-        #f7eaf0 28px
+        #f5e4ec 27px,
+        #f5e4ec 28px
     ) !important;
+    background-position: 0 14px !important;
+    background-size: 100% 28px !important;
     border: 2px solid #f29ec0 !important;
     border-top: 10px solid #fce0ec !important;
     box-shadow: 4px 4px 0px rgba(242, 158, 192, 0.55) !important;
-    padding: 16px !important;
+    padding: 14px 18px 18px 18px !important;
     border-radius: 0px !important;
 }}
 
 .journal-entry-meta {{
     font-family: "Courier New", monospace;
     font-size: 11px;
+    line-height: 28px;
+    height: 28px;
     color: #b07a98;
-    margin-bottom: 2px;
+    margin: 0;
+    padding: 0;
 }}
 
 .journal-entry-title {{
     font-family: "Courier New", monospace;
     font-size: 17px;
     font-weight: 900;
+    line-height: 28px;
+    height: 28px;
     color: #9e4374;
-    margin: 0 0 10px 0;
+    margin: 0 0 14px 0;
+    padding: 0;
 }}
 
 .journal-subbox {{

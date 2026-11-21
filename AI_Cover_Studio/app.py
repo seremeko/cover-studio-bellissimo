@@ -8,6 +8,8 @@ import base64
 import shutil
 import zipfile
 import subprocess
+import urllib.request
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
@@ -533,9 +535,27 @@ def run_rvc_active_only(
 
 
 # ---------------------------------------------------------------------------
-# Hugging Face Model Search & Download
+# Multi-Source RVC Model Search & Two-Step Download (HF Models/Datasets, GitHub, Direct URL)
 # ---------------------------------------------------------------------------
-def download_hf_model(character_name: str, progress=gr.Progress()):
+def _github_get_json(url: str):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "AI-Cover-Studio",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _download_url_to_file(url: str, dst_path: str):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as resp, open(dst_path, "wb") as f:
+        shutil.copyfileobj(resp, f)
+
+
+def search_rvc_models(character_name: str, progress=gr.Progress()):
     logs = []
 
     def log(msg: str):
@@ -544,117 +564,300 @@ def download_hf_model(character_name: str, progress=gr.Progress()):
 
     query_raw = (character_name or "").strip()
     if not query_raw:
-        yield log("[ERRORE] Inserisci il nome di un personaggio o artista."), gr.update(), gr.update()
+        yield (
+            log("[ERRORE] Inserisci il nome di un personaggio o artista."),
+            {},
+            gr.update(choices=[], value=None, visible=False),
+            gr.update(visible=False),
+        )
         return
 
-    safe_folder = sanitize_name(query_raw, default="custom_voice")
-    target_base = os.path.join(MODELS_DIR, safe_folder)
-    os.makedirs(target_base, exist_ok=True)
-
-    progress(0.05, desc="Ricerca su Hugging Face Hub...")
-    yield log(f"[HF] Ricerca modelli RVC v2 per '{query_raw}'..."), gr.update(), gr.update()
+    progress(0.05, desc="Ricerca su Hugging Face e GitHub...")
+    yield (
+        log(f"[CERCA] Ricerca multi-fonte per '{query_raw}' (HF Models, HF Datasets, GitHub)..."),
+        {},
+        gr.update(choices=[], value=None, visible=False),
+        gr.update(visible=False),
+    )
 
     api = HfApi()
-    queries = [query_raw, f"{query_raw} rvc", f"{query_raw} RVC v2"]
-    candidates = []
-    seen_repos = set()
+    queries = [query_raw, f"{query_raw} rvc"]
+    candidates: dict[str, dict] = {}
+    seen_keys = set()
 
-    for q in queries:
+    # 1. Hugging Face Models & Datasets
+    for idx_q, q in enumerate(queries):
+        progress(0.15 + 0.25 * idx_q, desc=f"Hugging Face Models: {q}...")
         try:
-            models = list(api.list_models(search=q, sort="downloads", limit=20))
-            for m in models:
-                if m.id in seen_repos:
+            for m in api.list_models(search=q, sort="downloads", limit=15):
+                key = ("hf_model", m.id)
+                if key in seen_keys:
                     continue
-                seen_repos.add(m.id)
+                seen_keys.add(key)
                 try:
                     files = api.list_repo_files(repo_id=m.id, repo_type="model")
-                    rvc_files = [
-                        f for f in files if f.lower().endswith((".pth", ".index", ".zip"))
+                    pth_f = [
+                        f for f in files
+                        if f.lower().endswith(".pth") and not os.path.basename(f).startswith(("G_", "D_"))
                     ]
-                    if any(f.lower().endswith((".pth", ".zip")) for f in rvc_files):
-                        candidates.append((getattr(m, "downloads", 0) or 0, m.id, rvc_files))
+                    idx_f = [f for f in files if f.lower().endswith(".index")]
+                    zip_f = [f for f in files if f.lower().endswith(".zip")]
+                    if pth_f or zip_f:
+                        dl = getattr(m, "downloads", 0) or 0
+                        kind = ".pth + .index" if (pth_f and idx_f) else (".zip" if zip_f else ".pth")
+                        label = f"[HF Model] {m.id} (dl: {dl} | {kind})"
+                        candidates[label] = {
+                            "source": "hf_model",
+                            "repo_id": m.id,
+                            "pth_files": pth_f,
+                            "idx_files": idx_f,
+                            "zip_files": zip_f,
+                            "score": dl + (10000 if (pth_f and idx_f) else 0),
+                        }
                 except Exception:
                     pass
         except Exception as e:
-            yield log(f"[AVVISO] Errore ricerca '{q}': {e}"), gr.update(), gr.update()
+            yield log(f"[AVVISO HF Model] {e}"), candidates, gr.update(), gr.update()
 
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    if not candidates:
-        yield log(f"[ERRORE] Nessun repository RVC trovato per '{query_raw}'."), gr.update(), gr.update()
+        progress(0.30 + 0.20 * idx_q, desc=f"Hugging Face Datasets: {q}...")
+        try:
+            for d in api.list_datasets(search=q, sort="downloads", limit=10):
+                key = ("hf_dataset", d.id)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                try:
+                    files = api.list_repo_files(repo_id=d.id, repo_type="dataset")
+                    pth_f = [
+                        f for f in files
+                        if f.lower().endswith(".pth") and not os.path.basename(f).startswith(("G_", "D_"))
+                    ]
+                    idx_f = [f for f in files if f.lower().endswith(".index")]
+                    zip_f = [f for f in files if f.lower().endswith(".zip")]
+                    if pth_f or zip_f:
+                        dl = getattr(d, "downloads", 0) or 0
+                        kind = ".pth + .index" if (pth_f and idx_f) else (".zip" if zip_f else ".pth")
+                        label = f"[HF Dataset] {d.id} (dl: {dl} | {kind})"
+                        candidates[label] = {
+                            "source": "hf_dataset",
+                            "repo_id": d.id,
+                            "pth_files": pth_f,
+                            "idx_files": idx_f,
+                            "zip_files": zip_f,
+                            "score": dl + (10000 if (pth_f and idx_f) else 0),
+                        }
+                except Exception:
+                    pass
+        except Exception as e:
+            yield log(f"[AVVISO HF Dataset] {e}"), candidates, gr.update(), gr.update()
+
+    # 2. GitHub Releases & Repositories
+    progress(0.75, desc="Ricerca su GitHub...")
+    try:
+        gh_q = urllib.parse.quote(f"{query_raw} rvc")
+        gh_res = _github_get_json(
+            f"https://api.github.com/search/repositories?q={gh_q}&sort=stars&per_page=8"
+        )
+        for repo in gh_res.get("items", []):
+            full_name = repo.get("full_name", "")
+            stars = repo.get("stargazers_count", 0) or 0
+            if not full_name:
+                continue
+            try:
+                rels = _github_get_json(f"https://api.github.com/repos/{full_name}/releases?per_page=3")
+                assets = []
+                for rel in rels:
+                    for a in rel.get("assets", []):
+                        aname = a.get("name", "").lower()
+                        if aname.endswith((".zip", ".pth", ".index")):
+                            assets.append({"name": a["name"], "url": a["browser_download_url"]})
+                if any(a["name"].lower().endswith((".zip", ".pth")) for a in assets):
+                    label = f"[GitHub Release] {full_name} (stars: {stars} | {len(assets)} file)"
+                    candidates[label] = {
+                        "source": "github_release",
+                        "repo_id": full_name,
+                        "assets": assets,
+                        "score": stars,
+                    }
+            except Exception:
+                pass
+    except Exception as e:
+        yield log(f"[AVVISO GitHub] {e}"), candidates, gr.update(), gr.update()
+
+    sorted_labels = sorted(
+        candidates.keys(),
+        key=lambda k: candidates[k].get("score", 0),
+        reverse=True,
+    )
+
+    if not sorted_labels:
+        yield (
+            log(f"[ERRORE] Nessun modello trovato su HF o GitHub per '{query_raw}'. Puoi usare l'URL diretto qui sotto."),
+            {},
+            gr.update(choices=[], value=None, visible=False),
+            gr.update(visible=False),
+        )
         return
 
-    yield log(f"[HF] Trovati {len(candidates)} repository candidati. Verifica RVC v2 in corso..."), gr.update(), gr.update()
+    progress(1.0, desc="Ricerca completata!")
+    yield (
+        log(f"[TROVATI {len(sorted_labels)} MODELLI] Seleziona quello desiderato dal menu qui sotto e premi 'Conferma e Scarica'."),
+        candidates,
+        gr.update(choices=sorted_labels, value=sorted_labels[0], visible=True),
+        gr.update(visible=True),
+    )
 
-    downloaded_label = None
-    for idx, (downloads, repo_id, files) in enumerate(candidates[:10]):
-        progress(0.15 + 0.75 * (idx / min(len(candidates), 10)), desc=f"Controllo {repo_id}...")
-        yield log(f"\n[CHECK] Repo: {repo_id} (downloads={downloads})"), gr.update(), gr.update()
 
-        pth_files = [
-            f for f in files
-            if f.lower().endswith(".pth") and "G_" not in os.path.basename(f) and "D_" not in os.path.basename(f)
-        ]
-        idx_files = [f for f in files if f.lower().endswith(".index")]
-        zip_files = [f for f in files if f.lower().endswith(".zip")]
+def _finalize_downloaded_folder(repo_dir: str):
+    """Finds .pth and .index in repo_dir and validates RVC v2 checkpoint."""
+    local_pth = None
+    local_idx = None
+    for r, _, fnames in os.walk(repo_dir):
+        for fn in sorted(fnames):
+            if fn.lower().endswith(".pth") and not fn.startswith(("G_", "D_")) and not local_pth:
+                local_pth = os.path.join(r, fn)
+            elif fn.lower().endswith(".index") and not local_idx:
+                local_idx = os.path.join(r, fn)
 
-        repo_dir = os.path.join(target_base, sanitize_name(repo_id.replace("/", "_")))
-        os.makedirs(repo_dir, exist_ok=True)
+    if not local_pth or not os.path.exists(local_pth):
+        return False, "Nessun file .pth valido trovato.", None
 
-        local_pth = None
-        local_idx = None
+    ckpt = torch.load(local_pth, map_location="cpu", weights_only=False)
+    version = ckpt.get("version")
+    f0 = ckpt.get("f0")
+    if version != "v2":
+        return False, f"Checkpoint non RVC v2 (version={version}, f0={f0}).", None
 
-        try:
-            if pth_files and idx_files:
-                pth_f = pth_files[0]
-                idx_f = idx_files[0]
-                local_pth = hf_hub_download(repo_id=repo_id, filename=pth_f, local_dir=repo_dir)
-                local_idx = hf_hub_download(repo_id=repo_id, filename=idx_f, local_dir=repo_dir)
+    rel_label = os.path.relpath(os.path.dirname(local_pth), MODELS_DIR).replace("\\", "/")
+    idx_note = "con .index" if (local_idx and os.path.exists(local_idx)) else "senza .index"
+    return True, f"RVC v2 verificato ({idx_note}, f0={f0})!", rel_label
+
+
+def confirm_download_model(
+    selected_label: str,
+    candidates_state: dict,
+    character_name: str,
+    progress=gr.Progress(),
+):
+    logs = []
+
+    def log(msg: str):
+        logs.append(msg)
+        return "\n".join(logs)
+
+    if not selected_label or not candidates_state or selected_label not in candidates_state:
+        yield log("[ERRORE] Seleziona prima un modello dalla lista."), gr.update(), gr.update()
+        return
+
+    info = candidates_state[selected_label]
+    source = info["source"]
+    repo_id = info["repo_id"]
+    safe_folder = sanitize_name(character_name or repo_id.split("/")[-1], default="custom_voice")
+    repo_dir = os.path.join(MODELS_DIR, safe_folder, sanitize_name(repo_id.replace("/", "_")))
+    os.makedirs(repo_dir, exist_ok=True)
+
+    progress(0.15, desc=f"Download {repo_id}...")
+    yield log(f"[DOWNLOAD] Scaricamento da {source}: {repo_id}..."), gr.update(), gr.update()
+
+    try:
+        if source in ("hf_model", "hf_dataset"):
+            repo_type = "model" if source == "hf_model" else "dataset"
+            pth_files = info.get("pth_files", [])
+            idx_files = info.get("idx_files", [])
+            zip_files = info.get("zip_files", [])
+            if pth_files:
+                hf_hub_download(repo_id=repo_id, repo_type=repo_type, filename=pth_files[0], local_dir=repo_dir)
+                if idx_files:
+                    hf_hub_download(repo_id=repo_id, repo_type=repo_type, filename=idx_files[0], local_dir=repo_dir)
             elif zip_files:
-                zip_f = zip_files[0]
-                local_zip = hf_hub_download(repo_id=repo_id, filename=zip_f, local_dir=repo_dir)
+                local_zip = hf_hub_download(
+                    repo_id=repo_id, repo_type=repo_type, filename=zip_files[0], local_dir=repo_dir
+                )
                 with zipfile.ZipFile(local_zip, "r") as zf:
                     zf.extractall(repo_dir)
-                for r, _, fnames in os.walk(repo_dir):
-                    for fn in fnames:
-                        if fn.lower().endswith(".pth") and not fn.startswith(("G_", "D_")) and not local_pth:
-                            local_pth = os.path.join(r, fn)
-                        elif fn.lower().endswith(".index") and not local_idx:
-                            local_idx = os.path.join(r, fn)
-            elif pth_files:
-                local_pth = hf_hub_download(repo_id=repo_id, filename=pth_files[0], local_dir=repo_dir)
+        elif source == "github_release":
+            assets = info.get("assets", [])
+            zips = [a for a in assets if a["name"].lower().endswith(".zip")]
+            pths = [a for a in assets if a["name"].lower().endswith(".pth")]
+            idxs = [a for a in assets if a["name"].lower().endswith(".index")]
+            if zips:
+                dst = os.path.join(repo_dir, zips[0]["name"])
+                _download_url_to_file(zips[0]["url"], dst)
+                with zipfile.ZipFile(dst, "r") as zf:
+                    zf.extractall(repo_dir)
+            elif pths:
+                _download_url_to_file(pths[0]["url"], os.path.join(repo_dir, pths[0]["name"]))
+                if idxs:
+                    _download_url_to_file(idxs[0]["url"], os.path.join(repo_dir, idxs[0]["name"]))
+    except Exception as e:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        yield log(f"[ERRORE DOWNLOAD] {e}"), gr.update(), gr.update()
+        return
 
-            if not local_pth or not os.path.exists(local_pth):
-                shutil.rmtree(repo_dir, ignore_errors=True)
-                continue
-
-            ckpt = torch.load(local_pth, map_location="cpu", weights_only=False)
-            version = ckpt.get("version")
-            f0 = ckpt.get("f0")
-            if version == "v2" and f0 in (True, 1) and local_idx and os.path.exists(local_idx):
-                yield log(f"[OK] Modello RVC v2 valido trovato! (.pth + .index)"), gr.update(), gr.update()
-                downloaded_label = os.path.relpath(os.path.dirname(local_pth), MODELS_DIR).replace("\\", "/")
-                break
-            elif version == "v2" and f0 in (True, 1):
-                yield log(f"[AVVISO] Trovato .pth RVC v2 ma senza .index; continuo a cercare uno completo..."), gr.update(), gr.update()
-                shutil.rmtree(repo_dir, ignore_errors=True)
-            else:
-                yield log(f"  -> Scartato (version={version}, f0={f0})"), gr.update(), gr.update()
-                shutil.rmtree(repo_dir, ignore_errors=True)
-        except Exception as e:
-            yield log(f"  -> Errore su {repo_id}: {e}"), gr.update(), gr.update()
-            shutil.rmtree(repo_dir, ignore_errors=True)
-
-    if not downloaded_label:
-        yield log(f"\n[ERRORE] Nessun modello RVC v2 completo (.pth + .index) valido trovato per '{query_raw}'."), gr.update(), gr.update()
+    progress(0.85, desc="Verifica RVC v2...")
+    ok, msg, rel_label = _finalize_downloaded_folder(repo_dir)
+    if not ok:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        yield log(f"[ERRORE VERIFICA] {msg}"), gr.update(), gr.update()
         return
 
     global MODEL_REGISTRY
     MODEL_REGISTRY, labels = scan_local_models()
     progress(1.0, desc="Completato!")
     yield (
-        log(f"[COMPLETATO] Voce aggiunta come '{downloaded_label}'. Menu aggiornati!"),
-        gr.update(choices=labels, value=downloaded_label),
-        gr.update(choices=labels, value=downloaded_label),
+        log(f"[COMPLETATO] {msg} Aggiunto come '{rel_label}'. Menu aggiornati!"),
+        gr.update(choices=labels, value=rel_label),
+        gr.update(choices=labels, value=rel_label),
+    )
+
+
+def install_from_direct_url(direct_url: str, custom_name: str, progress=gr.Progress()):
+    logs = []
+
+    def log(msg: str):
+        logs.append(msg)
+        return "\n".join(logs)
+
+    url = (direct_url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        yield log("[ERRORE] Inserisci un URL valido (http:// o https://)."), gr.update(), gr.update()
+        return
+
+    folder_name = sanitize_name(custom_name or "direct_voice", default="direct_voice")
+    repo_dir = os.path.join(MODELS_DIR, folder_name)
+    os.makedirs(repo_dir, exist_ok=True)
+
+    filename = os.path.basename(urllib.parse.urlparse(url).path) or "model.zip"
+    if not filename.lower().endswith((".zip", ".pth")):
+        filename += ".zip"
+    dst = os.path.join(repo_dir, filename)
+
+    progress(0.2, desc="Download da URL diretto...")
+    yield log(f"[URL] Scaricamento da {url}..."), gr.update(), gr.update()
+    try:
+        _download_url_to_file(url, dst)
+        if dst.lower().endswith(".zip"):
+            with zipfile.ZipFile(dst, "r") as zf:
+                zf.extractall(repo_dir)
+    except Exception as e:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        yield log(f"[ERRORE] Download fallito: {e}"), gr.update(), gr.update()
+        return
+
+    progress(0.85, desc="Verifica RVC v2...")
+    ok, msg, rel_label = _finalize_downloaded_folder(repo_dir)
+    if not ok:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        yield log(f"[ERRORE VERIFICA] {msg}"), gr.update(), gr.update()
+        return
+
+    global MODEL_REGISTRY
+    MODEL_REGISTRY, labels = scan_local_models()
+    progress(1.0, desc="Completato!")
+    yield (
+        log(f"[COMPLETATO] {msg} Aggiunto come '{rel_label}'. Menu aggiornati!"),
+        gr.update(choices=labels, value=rel_label),
+        gr.update(choices=labels, value=rel_label),
     )
 
 
@@ -1497,19 +1700,53 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
 
                 # TAB 2: Scarica Nuova Voce
                 with gr.Tab("Scarica Nuova Voce"):
+                    hf_candidates_state = gr.State({})
                     with gr.Column(elem_classes=["journal-subbox"]):
                         gr.HTML(
-                            '<p style="font-size:12px;margin:0 0 8px 0;">Cerca su Hugging Face Hub un modello RVC v2 valido '
-                            '(.pth + .index), lo scarica in <code>..\\models\\&lt;nome&gt;</code> e aggiorna subito i menu.</p>'
+                            '<p style="font-size:12px;margin:0 0 8px 0;"><b>Step 1:</b> Cerca su <b>Hugging Face (Models &amp; Datasets)</b> '
+                            'e <b>GitHub</b>, poi seleziona il modello esatto prima di confermare il download.</p>'
                         )
-                        hf_name_input = gr.Textbox(
-                            label="Nome Personaggio / Artista",
-                            placeholder="Es: Kasane Teto, Sfera Ebbasta, Hatsune Miku...",
+                        with gr.Row():
+                            hf_name_input = gr.Textbox(
+                                label="Nome Personaggio / Artista",
+                                placeholder="Es: Kasane Teto, Sfera Ebbasta, Hatsune Miku...",
+                                scale=4,
+                            )
+                            hf_search_btn = gr.Button("Cerca Modelli", variant="secondary", scale=1)
+
+                        hf_results_dd = gr.Dropdown(
+                            choices=[],
+                            value=None,
+                            label="Modelli trovati (seleziona prima di confermare)",
+                            visible=False,
                         )
-                        hf_download_btn = gr.Button("Cerca e Scarica Modello RVC v2", variant="primary")
+                        hf_confirm_btn = gr.Button(
+                            "Conferma e Scarica Selezionato",
+                            variant="primary",
+                            visible=False,
+                        )
+
+                        gr.HTML(
+                            '<hr style="border:none;border-top:1px dashed #f2b5cc;margin:10px 0;">'
+                            '<p style="font-size:12px;margin:0 0 6px 0;"><b>Oppure installa da URL diretto</b> '
+                            '(.zip o .pth da qualsiasi sito come weights.gg, pixeldrain, github, ecc.):</p>'
+                        )
+                        with gr.Row():
+                            direct_url_input = gr.Textbox(
+                                label="URL diretto (.zip o .pth)",
+                                placeholder="https://.../modello_rvc_v2.zip",
+                                scale=3,
+                            )
+                            direct_name_input = gr.Textbox(
+                                label="Nome cartella modello",
+                                placeholder="Es: mio_modello",
+                                scale=1,
+                            )
+                        direct_download_btn = gr.Button("Scarica da URL Diretto", variant="secondary")
+
                         hf_log_box = gr.Textbox(
-                            label="Stato Download Hugging Face",
-                            lines=10,
+                            label="Stato Ricerca e Download",
+                            lines=9,
                             interactive=False,
                             elem_classes=["journal-log"],
                         )
@@ -1568,9 +1805,21 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
         outputs=[voice1_dd, voice2_dd],
     )
 
-    hf_download_btn.click(
-        fn=download_hf_model,
+    hf_search_btn.click(
+        fn=search_rvc_models,
         inputs=[hf_name_input],
+        outputs=[hf_log_box, hf_candidates_state, hf_results_dd, hf_confirm_btn],
+    )
+
+    hf_confirm_btn.click(
+        fn=confirm_download_model,
+        inputs=[hf_results_dd, hf_candidates_state, hf_name_input],
+        outputs=[hf_log_box, voice1_dd, voice2_dd],
+    )
+
+    direct_download_btn.click(
+        fn=install_from_direct_url,
+        inputs=[direct_url_input, direct_name_input],
         outputs=[hf_log_box, voice1_dd, voice2_dd],
     )
 

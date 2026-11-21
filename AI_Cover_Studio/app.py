@@ -684,12 +684,13 @@ def search_rvc_models(character_name: str, progress=gr.Progress()):
     except Exception as e:
         yield log(f"[AVVISO GitHub] {e}"), candidates, gr.update(), gr.update()
 
-    # 3. Voice-Models.com
+    # 3. Voice-Models.com (uses POST search + page)
     progress(0.88, desc="Ricerca su Voice-Models.com...")
     try:
-        vm_q = urllib.parse.quote(query_raw)
+        post_data = urllib.parse.urlencode({"search": query_raw, "page": 1}).encode("utf-8")
         req = urllib.request.Request(
-            f"https://voice-models.com/fetch_data.php?search={vm_q}",
+            "https://voice-models.com/fetch_data.php",
+            data=post_data,
             headers={"User-Agent": "Mozilla/5.0"},
         )
         with urllib.request.urlopen(req, timeout=12) as resp:
@@ -715,13 +716,26 @@ def search_rvc_models(character_name: str, progress=gr.Progress()):
                     "source": "voice_models",
                     "repo_id": title,
                     "url": dl_url,
-                    "score": 5000 if query_raw.lower() in title.lower() else 500,
+                    "score": 0,
                 }
                 vm_count += 1
             if vm_count >= 15:
                 break
     except Exception as e:
         yield log(f"[AVVISO Voice-Models] {e}"), candidates, gr.update(), gr.update()
+
+    # Filter & rank all candidates by query token relevance
+    query_tokens = [w for w in re.split(r"[^a-z0-9]+", query_raw.lower()) if len(w) >= 2]
+    if query_tokens:
+        filtered: dict[str, dict] = {}
+        for lbl, info in candidates.items():
+            haystack = f"{info.get('repo_id', '')} {lbl}".lower()
+            hits = sum(1 for tok in query_tokens if tok in haystack)
+            if hits > 0:
+                all_match = 100000 if hits == len(query_tokens) else 0
+                info["score"] = (hits * 1_000_000) + all_match + info.get("score", 0)
+                filtered[lbl] = info
+        candidates = filtered
 
     sorted_labels = sorted(
         candidates.keys(),

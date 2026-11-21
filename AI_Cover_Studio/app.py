@@ -1,6 +1,9 @@
 import os
 import re
 import sys
+import html
+import json
+import random
 import base64
 import shutil
 import zipfile
@@ -1140,6 +1143,34 @@ body, .gradio-container {{
     margin-top: 0;
 }}
 
+.mini-pl-box {{
+    background: #ffffff;
+    border: 1.5px solid #f29ec0;
+    padding: 5px 6px;
+    margin: 4px 0;
+}}
+
+.mini-pl-title {{
+    font-family: "Courier New", monospace;
+    font-size: 10.5px;
+    font-weight: bold;
+    color: #8c3b68;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}}
+
+.mini-pl-btns {{
+    gap: 4px !important;
+    margin: 2px 0 4px 0 !important;
+}}
+
+.mini-pl-btns button {{
+    min-width: 0 !important;
+    padding: 2px 4px !important;
+    font-size: 11px !important;
+}}
+
 /* Main Notebook Card (Ruled Paper) */
 .journal-main {{
     background-color: #fffdfd !important;
@@ -1302,7 +1333,100 @@ HEADER_HTML = """
 </div>
 """
 
-SIDEBAR_HTML = f"""
+PLAYLIST_URL = "https://www.youtube.com/playlist?list=PLsSp13RQa9acoejdBMgYNciIx6_2NHKX8"
+PLAYLIST_CACHE_PATH = os.path.join(APP_DIR, "assets", "playlist_cache.json")
+
+
+def get_playlist_tracks() -> list[dict[str, str]]:
+    if os.path.exists(PLAYLIST_CACHE_PATH):
+        try:
+            with open(PLAYLIST_CACHE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list) and data:
+                    return data
+        except Exception:
+            pass
+
+    proc = subprocess.run(
+        [YT_DLP_EXE, "--flat-playlist", "--print", "%(id)s\t%(title)s", PLAYLIST_URL],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+    tracks = []
+    for line in proc.stdout.splitlines():
+        if "\t" in line:
+            vid, title = line.split("\t", 1)
+            vid = vid.strip()
+            title = title.strip()
+            if vid and title and title != "[Private video]" and title != "[Deleted video]":
+                tracks.append({"id": vid, "title": title})
+    if tracks:
+        try:
+            with open(PLAYLIST_CACHE_PATH, "w", encoding="utf-8") as f:
+                json.dump(tracks, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+    return tracks
+
+
+def play_playlist_track(action: str, current_idx: int):
+    try:
+        tracks = get_playlist_tracks()
+    except Exception as e:
+        return current_idx, f'<div class="mini-pl-box">errore playlist: {html.escape(str(e))}</div>'
+
+    if not tracks:
+        return 0, '<div class="mini-pl-box">playlist vuota</div>'
+
+    n = len(tracks)
+    if action == "next":
+        idx = (current_idx + 1) % n
+    elif action == "prev":
+        idx = (current_idx - 1) % n
+    elif action == "rand":
+        idx = random.randrange(n)
+    else:
+        idx = current_idx % n
+
+    track = tracks[idx]
+    vid = track["id"]
+    title = html.escape(track["title"])
+    watch_url = f"https://www.youtube.com/watch?v={vid}"
+
+    try:
+        proc = subprocess.run(
+            [YT_DLP_EXE, "-f", "bestaudio[ext=m4a]/bestaudio", "--no-playlist", "-g", watch_url],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        stream_url = proc.stdout.strip().splitlines()[0]
+    except Exception:
+        return idx, (
+            f'<div class="mini-pl-box">'
+            f'<div class="mini-pl-title">{idx+1}/{n} - {title}</div>'
+            f'<div style="font-size:10px;color:#b0416e;">traccia non riproducibile, premi &gt;|</div>'
+            f'</div>'
+        )
+
+    player_html = f"""
+    <div class="mini-pl-box">
+        <div class="mini-pl-title">{idx + 1}/{n} // {title}</div>
+        <audio controls autoplay style="width: 100%; height: 28px; margin-top: 4px;">
+            <source src="{html.escape(stream_url)}" type="audio/mp4">
+        </audio>
+        <div style="margin-top: 3px;">
+            <a href="{PLAYLIST_URL}" target="_blank" rel="noopener noreferrer" style="font-size: 10px; color: #9e4374; text-decoration: underline;">apri playlist su youtube</a>
+        </div>
+    </div>
+    """
+    return idx, player_html
+
+
+SIDEBAR_TOP_HTML = """
 <div class="sidebar-heading">ABOUT</div>
 <p class="sidebar-text">
     hi! welcome to ai cover studio. drop a youtube link or song title and turn it into a vocaloid or custom rvc v2 cover.
@@ -1317,23 +1441,21 @@ SIDEBAR_HTML = f"""
 </ul>
 
 <div class="sidebar-heading">STATUS</div>
-<div class="status-box">
+<div class="status-box" style="padding-bottom: 6px;">
     <div class="status-label">NOW PLAYING</div>
-    <div>cozy vocaloid playlist</div>
-    <iframe
-        width="100%"
-        height="112"
-        src="https://www.youtube.com/embed/89hnFfoedfA?list=PLsSp13RQa9acoejdBMgYNciIx6_2NHKX8"
-        title="Now Playing Playlist"
-        frameborder="0"
-        referrerpolicy="strict-origin-when-cross-origin"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-        allowfullscreen
-        style="border: 1.5px solid #f29ec0; margin: 6px 0 4px 0; display: block; background: #fff4f8;">
-    </iframe>
-    <div style="margin-bottom: 6px;">
-        <a href="https://youtube.com/playlist?list=PLsSp13RQa9acoejdBMgYNciIx6_2NHKX8" target="_blank" rel="noopener noreferrer" style="font-size: 10px; color: #9e4374; text-decoration: underline;">apri playlist su youtube</a>
+"""
+
+INITIAL_MINI_PLAYER_HTML = f"""
+    <div class="mini-pl-box">
+        <div class="mini-pl-title">cozy playlist (premi play!)</div>
+        <div style="margin-top: 3px;">
+            <a href="{PLAYLIST_URL}" target="_blank" rel="noopener noreferrer" style="font-size: 10px; color: #9e4374; text-decoration: underline;">apri playlist su youtube</a>
+        </div>
     </div>
+"""
+
+SIDEBAR_BOTTOM_HTML = f"""
+<div class="status-box" style="margin-top: 0; border-top: none; padding-top: 4px;">
     <div class="status-label">LOCAL MODELS</div>
     <div>{len(INITIAL_LABELS)} voices ready</div>
     <div class="status-label">MOOD</div>
@@ -1354,7 +1476,15 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
 
     with gr.Row(equal_height=False):
         with gr.Column(scale=1, min_width=240, elem_classes=["journal-sidebar"]):
-            gr.HTML(SIDEBAR_HTML)
+            playlist_idx_state = gr.State(0)
+            gr.HTML(SIDEBAR_TOP_HTML)
+            mini_player_html = gr.HTML(INITIAL_MINI_PLAYER_HTML)
+            with gr.Row(elem_classes=["mini-pl-btns"]):
+                pl_prev_btn = gr.Button("|<", size="sm", variant="secondary", scale=1)
+                pl_play_btn = gr.Button("play", size="sm", variant="primary", scale=2)
+                pl_next_btn = gr.Button(">|", size="sm", variant="secondary", scale=1)
+                pl_rand_btn = gr.Button("rnd", size="sm", variant="secondary", scale=1)
+            gr.HTML(SIDEBAR_BOTTOM_HTML)
 
         with gr.Column(scale=3, elem_classes=["journal-main"]):
             gr.HTML(
@@ -1510,6 +1640,28 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
         fn=lambda p: gr.update(visible=(p == "Manuale")),
         inputs=[pitch2_mode],
         outputs=[pitch2_manual],
+    )
+
+    # Playlist mini-player actions
+    pl_play_btn.click(
+        fn=lambda idx: play_playlist_track("play", idx),
+        inputs=[playlist_idx_state],
+        outputs=[playlist_idx_state, mini_player_html],
+    )
+    pl_prev_btn.click(
+        fn=lambda idx: play_playlist_track("prev", idx),
+        inputs=[playlist_idx_state],
+        outputs=[playlist_idx_state, mini_player_html],
+    )
+    pl_next_btn.click(
+        fn=lambda idx: play_playlist_track("next", idx),
+        inputs=[playlist_idx_state],
+        outputs=[playlist_idx_state, mini_player_html],
+    )
+    pl_rand_btn.click(
+        fn=lambda idx: play_playlist_track("rand", idx),
+        inputs=[playlist_idx_state],
+        outputs=[playlist_idx_state, mini_player_html],
     )
 
     # Actions

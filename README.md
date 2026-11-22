@@ -28,25 +28,26 @@ Progetto personale di **Meko**, progettato con una pipeline audio pulita (zero A
 - **Duetto automatico via analisi F0**: in modalita Duetto, analizza il contorno di frequenza fondamentale (F0) della voce originale con PyWorld per separare automaticamente le parti maschili da quelle femminili, applicando crossfade da `100ms` e gating morbido da `50ms`.
 - **Inferenza RVC v2 pura**: utilizza `rvc_cli` (motore Applio/RVC) con estrattore `rmvpe`, `embedder_model="contentvec"`, `protect=0.33` e `f0_autotune=False`.
 - **Pitch automatico intelligente**: in modalita `Auto`, calcola la mediana F0 dei frame vocali attivi e seleziona automaticamente `0`, `+12` o `-12` semitoni in base al registro di partenza e al modello di destinazione.
-- **Downloader integrato da Hugging Face Hub**: cerca, scarica, estrae (anche da `.zip`) e verifica tramite `torch.load` che il checkpoint sia effettivamente un modello RVC v2 valido con `f0` attivo prima di aggiungerlo ai menu.
+- **Downloader multi-fonte integrato**: cerca su Hugging Face Hub (Models e Datasets), GitHub e URL diretti, scarica, estrae (anche da `.zip`) e verifica tramite `torch.load` che il checkpoint sia effettivamente un modello RVC v2 valido con `f0` attivo prima di aggiungerlo ai menu.
+- **Training locale RVC v2 e Text to Speech**: tab dedicate per addestrare nuovi modelli vocali RVC v2 dai propri file audio e per generare tracce parlate con `edge-tts` convertite con la voce scelta.
 - **Mixaggio e Mastering da studio**: catena `pedalboard` con filtro passa-alto, compressione leggera, riverbero Plate caldo attivabile/disattivabile, calibrazione automatica del livello RMS rispetto alla voce originale, limiter sul master ed esportazione finale in **MP3 a 320 kbps** (`44100 Hz` stereo) tramite `ffmpeg-python`.
-- **Archivio integrato**: tab dedicata per sfogliare, ascoltare e scaricare tutte le cover MP3 gia generate.
+- **Lettore MP3 pixel art integrato**: mini-player kawaii posizionato sopra la sidebar sinistra con riproduzione, regolazione volume (`VOL`), menu tracce con download diretto per ogni MP3 e aggiornamento automatico a ogni nuova generazione.
 
 ---
 
 ## Struttura del repository
 
 ```text
-Progetto_Pandetta_Miku/
+COVER-STUDIO-BELLISSIMO/
 |-- AI_Cover_Studio/
 |   |-- app.py                  # Applicazione principale Gradio + pipeline backend
 |   |-- make_sprites.py         # Generatore degli asset pixel art locali (sfondo e sprite)
 |   |-- avvia_studio.bat        # Script di avvio rapido per Windows
-|   |-- assets/                 # Sfondo pixel art (bg_sky.png) e sprite GUMI
-|   `-- output/                 # (Ignorata da Git) Cartelle di lavoro per ogni canzone
+|   |-- assets/                 # Sfondo pixel art (bg_sky.png), sprite shimeji e rika_nipah.mp3
+|   |-- datasets/               # (Ignorata da Git) Dataset audio per il training locale
+|   `-- output/                 # (Ignorata da Git) Cartelle di lavoro per ogni canzone e TTS
 |-- rvc_cli/                    # Motore RVC v2 (inferenza, RMVPE, ContentVec, config)
 |-- models/                     # (Ignorata da Git) Modelli RVC locali (.pth + .index)
-|-- venv/                       # (Ignorata da Git) Ambiente virtuale Python
 |-- phase1_download.py          # Script standalone: download audio yt-dlp
 |-- phase2_demucs.py            # Script standalone: separazione stem Demucs
 |-- phase3_search_hf.py         # Script standalone: ricerca modelli su Hugging Face
@@ -56,6 +57,8 @@ Progetto_Pandetta_Miku/
 |-- requirements.txt            # Dipendenze Python del progetto
 `-- .gitignore                  # Esclude venv, modelli, pesi binari, audio e output
 ```
+
+*(L'ambiente virtuale `venv/` viene rilevato automaticamente sia dentro `COVER-STUDIO-BELLISSIMO/venv/` sia nella cartella superiore `../venv/`.)*
 
 ---
 
@@ -114,17 +117,19 @@ L'interfaccia Web in Gradio e strutturata come un blog/journal dei primi anni 20
 
 - **Tema chiaro forzato**: blocco della modalita scura via CSS (`:root, .dark` con `color-scheme: light`) e script JavaScript nel `<head>` che rimuove qualsiasi classe `.dark` da `<html>` e `<body>`.
 - **Sfondo pixel art**: cielo pastello con nuvole e cityscape pixelato (`assets/bg_sky.png`) visibile dietro al contenitore trasparente.
-- **Sidebar guida di Meko**: pannello sinistro con le sezioni `ABOUT`, `HOW IT WORKS`, `MADE WITH` e `STATUS` (conteggio dei modelli locali pronti).
-- **Card principale a righe da quaderno**: griglia da `28px` allineata alle intestazioni con tre tab:
+- **Lettore MP3 pixel art (colonna sinistra)**: widget compatto posizionato sopra la sidebar informativa, con ciondolo a cuoricino pixelato, CD olografico rotante, barra di avanzamento a 14 tacche cliccabile, pulsanti `<<`, Play/Pausa, `>>`, controllo volume (`VOL` con slider `0-100%`) e menu a tre linee per sfogliare tutte le cover/TTS e scaricarle singolarmente. Si aggiorna automaticamente al termine di ogni nuova generazione.
+- **Sidebar guida di Meko**: pannello sinistro sotto il player con le sezioni `ABOUT`, `HOW IT WORKS`, `MADE WITH` e `STATUS` (conteggio dei modelli locali pronti).
+- **Card principale a righe da quaderno**: griglia da `28px` allineata alle intestazioni con quattro tab su una sola riga:
   1. **Generatore Cover**: input brano/URL, modalita Singola o Duetto, selezione modelli con tasto `Aggiorna lista`, selettore Pitch (`Auto`, `-12`, `0`, `+12`, `Manuale`), slider `Index Rate`, checkbox `Riverbero Plate`, log testuale live, barra di avanzamento e player audio finale.
-  2. **Scarica Nuova Voce**: ricerca su Hugging Face Hub per nome personaggio/artista, download automatico in `..\models\<nome>`, verifica RVC v2 e aggiornamento immediato dei menu a tendina.
-  3. **Archivio**: elenco di tutti i file `.mp3` presenti in `AI_Cover_Studio/output/` e nella root del progetto (ordinati dal piu recente), con player audio e componente download.
-- **Mascotte interattiva GUMI**: sprite pixel art scontornato (`assets/sprite_gumi.png`) con fisica in stile Shimeji:
-  - Cammina autonomamente lungo il bordo inferiore della finestra.
-  - Puo essere afferrata e trascinata ovunque con il mouse (`pointerdown` / `pointermove`).
-  - Al rilascio cade verso il basso con gravita e rimbalzo morbido.
-  - Al click esegue un salto con rotazione; al doppio click cambia direzione con un salto alto.
-  - Negli urti ad alta velocita riproduce un effetto sonoro sintetizzato tramite Web Audio API.
+  2. **Scarica Nuova Voce**: ricerca multi-fonte (Hugging Face Models/Datasets, GitHub, URL diretto) per nome personaggio/artista, download automatico in `models/<nome>`, verifica RVC v2 e aggiornamento immediato dei menu a tendina.
+  3. **Crea Voce**: addestramento locale di un nuovo modello RVC v2 a partire dai propri file audio.
+  4. **Text to Speech**: sintesi vocale con `edge-tts` e conversione con il modello RVC v2 selezionato.
+- **Mascotte interattive pixel art**: sprite scontornati (`Miku`, `Gumi`, `Rin`, `Len`, `Luka`, `Kaito`, `Rika`, `Rena`, `Yoru`, `Asa`, `Teto`) tutti sulla stessa linea e proporzione, con fisica in stile Shimeji:
+  - Camminano autonomamente lungo il bordo inferiore della finestra.
+  - Possono essere afferrati e trascinati ovunque con il mouse (`pointerdown` / `pointermove`).
+  - Al rilascio cadono verso il basso con gravita e rimbalzo morbido.
+  - Al click eseguono un salto con rotazione; al doppio click cambiano direzione con un salto alto.
+  - Negli urti ad alta velocita riproducono effetti sonori dedicati (inclusa la voce `"nipah"` per Rika sincronizzata con l'impatto).
 
 ---
 

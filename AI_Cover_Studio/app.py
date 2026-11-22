@@ -2059,6 +2059,8 @@ BG_SKY_URI = _load_data_uri("bg_sky.png", "image/png")
 GUMI_SPRITE_URI = _load_data_uri("sprite_gumi.png", "image/png")
 MIKU_SPRITE_URI = _load_data_uri("sprite_miku.png", "image/png")
 RENA_SPRITE_URI = _load_data_uri("sprite_rena.png", "image/png")
+RIKA_SPRITE_URI = _load_data_uri("sprite_rika.png", "image/png")
+RIKA_NIPAH_URI = _load_data_uri("rika_nipah.mp3", "audio/mpeg")
 
 CUSTOM_CSS = f"""
 @keyframes sprite-hop {{
@@ -2507,6 +2509,9 @@ CHIBI_STAGE_HTML = f"""
     </div>
     <div id="rena-pet" class="vocaloid-walker" title="Rena">
         <img class="chibi-pixel-sprite" src="{RENA_SPRITE_URI}" alt="Rena" draggable="false" />
+    </div>
+    <div id="rika-pet" class="vocaloid-walker" title="Rika">
+        <img class="chibi-pixel-sprite" src="{RIKA_SPRITE_URI}" alt="Rika" draggable="false" />
     </div>
 </div>
 """
@@ -2992,8 +2997,8 @@ FORCE_LIGHT_HEAD = """
     new MutationObserver(stripDark).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     window.addEventListener('DOMContentLoaded', stripDark);
 
-    // Interactive Shimeji-style Vocaloid pets (GUMI & Miku)
-    function initShimejiPet(petId, startX, startVx, startDir, baseTone) {
+    // Interactive Shimeji-style pets (GUMI, Miku, Rena, Rika)
+    function initShimejiPet(petId, startX, startVx, startDir, baseTone, customAudioUri) {
         const pet = document.getElementById(petId);
         if (!pet || pet.dataset.bound === '1') return;
         pet.dataset.bound = '1';
@@ -3017,8 +3022,16 @@ FORCE_LIGHT_HEAD = """
 
         function playGumiImpactSound(intensity) {
             const nowMs = performance.now();
-            if (nowMs - lastSoundTime < 350) return;
+            if (nowMs - lastSoundTime < 450) return;
             lastSoundTime = nowMs;
+            if (customAudioUri) {
+                try {
+                    const a = new Audio(customAudioUri);
+                    a.volume = 0.85;
+                    a.play().catch(() => {});
+                    return;
+                } catch (err) {}
+            }
             try {
                 if (!audioCtx) {
                     const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -3174,9 +3187,10 @@ FORCE_LIGHT_HEAD = """
     }
 
     function initAllPets() {
-        initShimejiPet('gumi-pet', 60, 1.15, 1, 520);
-        initShimejiPet('miku-pet', () => Math.max(120, window.innerWidth - 110), -1.05, -1, 640);
-        initShimejiPet('rena-pet', () => Math.max(80, Math.floor(window.innerWidth * 0.45)), 0.95, 1, 580);
+        initShimejiPet('gumi-pet', 60, 1.15, 1, 520, null);
+        initShimejiPet('miku-pet', () => Math.max(120, window.innerWidth - 110), -1.05, -1, 640, null);
+        initShimejiPet('rena-pet', () => Math.max(80, Math.floor(window.innerWidth * 0.45)), 0.95, 1, 580, null);
+        initShimejiPet('rika-pet', () => Math.max(100, Math.floor(window.innerWidth * 0.65)), -0.90, -1, 680, window.__RIKA_NIPAH_URI || null);
     }
 
     const observer = new MutationObserver(initAllPets);
@@ -3187,4 +3201,5 @@ FORCE_LIGHT_HEAD = """
 """
 
 if __name__ == "__main__":
-    demo.queue().launch(inbrowser=True, css=CUSTOM_CSS, head=FORCE_LIGHT_HEAD)
+    head_html = f'<script>window.__RIKA_NIPAH_URI = "{RIKA_NIPAH_URI}";</script>' + FORCE_LIGHT_HEAD
+    demo.queue().launch(inbrowser=True, css=CUSTOM_CSS, head=head_html)

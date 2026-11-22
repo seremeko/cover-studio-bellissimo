@@ -1652,16 +1652,16 @@ SIDEBAR_HTML = f"""
 <div class="sidebar-heading">ABOUT</div>
 <p class="sidebar-text">
     ciao! sono <b>Meko</b> e questo e il mio studio personale di <b>AI Cover</b>.
-    nasce per creare cover Vocaloid e personalizzate in locale senza passare da servizi online.
+    nasce per creare cover Vocaloid e personalizzate in locale da YouTube o da file MP3/MP4 sul PC, senza passare da servizi online.
 </p>
 
 <div class="sidebar-heading">HOW IT WORKS</div>
 <ul class="sidebar-list">
-    <li>1. incolla un titolo o url youtube (<code>yt-dlp</code> scarica il wav).</li>
+    <li>1. incolla un titolo/url youtube o carica un file locale (mp3, mp4, wav).</li>
     <li>2. <code>demucs</code> separa voce e base strumentale.</li>
     <li>3. in duetto, <code>pyworld</code> divide voce maschile e femminile via F0.</li>
-    <li>4. <code>rvc v2 (rmvpe)</code> converte il timbro vocale.</li>
-    <li>5. <code>pedalboard</code> + <code>ffmpeg</code> mixano in mp3 320 kbps.</li>
+    <li>4. <code>rvc v2 (rmvpe)</code> converte il timbro (scarica nuove voci da HF, Voice-Models, GitHub o URL diretto).</li>
+    <li>5. <code>pedalboard</code> + <code>ffmpeg</code> mixano in mp3 320 kbps, salvati nella tab Archivio.</li>
 </ul>
 
 <div class="sidebar-heading">MADE WITH</div>
@@ -1670,7 +1670,7 @@ SIDEBAR_HTML = f"""
     <li>* rvc_cli + htdemucs</li>
     <li>* pyworld + pydub</li>
     <li>* pedalboard + ffmpeg</li>
-    <li>* hugging face hub</li>
+    <li>* hf + voice-models + github</li>
 </ul>
 
 <div class="sidebar-heading">STATUS</div>

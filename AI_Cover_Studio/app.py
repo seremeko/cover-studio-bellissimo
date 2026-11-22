@@ -1166,6 +1166,36 @@ def _format_diag_md(
     )
 
 
+def _render_console_html(lines: list[str]) -> str:
+    err_tokens = (
+        "[ERRORE",
+        "ERROR:",
+        "Error:",
+        "Exception:",
+        "Traceback",
+        "RuntimeError",
+        "ModuleNotFoundError",
+        "FileNotFoundError",
+        "OSError",
+        "ValueError",
+        "KeyError",
+        "CUDA out of memory",
+        "failed",
+    )
+    out = ['<div class="journal-log-html">']
+    for ln in lines[-140:]:
+        esc = html.escape(ln)
+        if any(tok in ln for tok in err_tokens):
+            out.append(
+                f'<div style="color:#b71c1c;background:#ffebee;font-weight:bold;'
+                f'padding:1px 4px;border-left:3px solid #d32f2f;margin:1px 0;">{esc}</div>'
+            )
+        else:
+            out.append(f'<div style="color:#7a345a;">{esc}</div>')
+    out.append("</div>")
+    return "".join(out)
+
+
 def train_rvc_voice(
     model_name: str,
     dataset_files: list[str] | None,
@@ -1185,7 +1215,7 @@ def train_rvc_voice(
 
     def log(msg: str):
         logs.append(msg)
-        return "\n".join(logs[-120:])
+        return _render_console_html(logs)
 
     safe_name = sanitize_name((model_name or "").strip(), default="")
     if not safe_name:
@@ -1217,7 +1247,7 @@ def train_rvc_voice(
         nonlocal gpu_label, vram_label
         gpu_label, vram_label = _get_gpu_and_vram_info()
         return (
-            "\n".join(logs[-120:]),
+            _render_console_html(logs),
             _format_plan_md(plan, bs, epochs),
             _format_live_progress_md(phase, cur_ep, epochs, cur_b, plan["batches_per_epoch"], cur_st, plan["total_steps"], time.time() - t_start, eta, err),
             _format_diag_md(gpu_label, eff_prec_label, vram_label, losses or {}, lowest),
@@ -1414,9 +1444,13 @@ def train_rvc_voice(
         epoch_times: list[float] = []
         last_ep_t = time.time()
         last_diag_t = 0.0
+        last_emit_t = 0.0
+        last_prog_ep = -1
         cached_losses: dict[str, float] = {}
         last_err_line = ""
         stream_done = False
+
+        progress(0.50, desc=f"Training avviato (Epoca 1/{epochs})...")
 
         while not stream_done:
             if TRAINING_CANCEL_EVENT.is_set():
@@ -1424,7 +1458,7 @@ def train_rvc_voice(
                 yield emit("Annullato", cur_ep, cur_batch, cur_step, None, "Interrotto dall'utente", cached_losses, lowest_gen)
                 return
 
-            got_line = False
+            epoch_changed = False
             while True:
                 try:
                     item = line_q.get_nowait()
@@ -1433,10 +1467,9 @@ def train_rvc_voice(
                 if item is None:
                     stream_done = True
                     break
-                got_line = True
                 if item.strip():
                     log(item)
-                if any(k in item for k in ("Error:", "Exception:", "CUDA out of memory", "RuntimeError", "Traceback")):
+                if any(k in item for k in ("Error:", "Exception:", "CUDA out of memory", "RuntimeError", "Traceback", "ModuleNotFoundError")):
                     last_err_line = item.strip()
 
                 ep_m = re.search(r"epoch=(\d+)\s*\|\s*step=(\d+)", item)
@@ -1444,6 +1477,7 @@ def train_rvc_voice(
                     new_ep = int(ep_m.group(1))
                     cur_step = int(ep_m.group(2))
                     if new_ep > cur_ep:
+                        epoch_changed = True
                         now_t = time.time()
                         if cur_ep > 0:
                             epoch_times.append(now_t - last_ep_t)
@@ -1473,15 +1507,17 @@ def train_rvc_voice(
                         cur_batch = b_cur
 
             now_t = time.time()
-            if now_t - last_diag_t >= 2.5 or got_line:
-                if now_t - last_diag_t >= 2.5:
+            if epoch_changed or (now_t - last_emit_t >= 2.5):
+                last_emit_t = now_t
+                if now_t - last_diag_t >= 3.0:
                     cached_losses = _read_latest_tb_losses(exp_dir)
                     last_diag_t = now_t
                 eta_val = None
                 if epoch_times and cur_ep < epochs:
                     avg_ep = sum(epoch_times) / len(epoch_times)
                     eta_val = avg_ep * max(0, epochs - cur_ep)
-                if plan["total_steps"] > 0 and cur_step > 0:
+                if cur_ep != last_prog_ep and plan["total_steps"] > 0 and cur_step > 0:
+                    last_prog_ep = cur_ep
                     progress(min(0.95, 0.50 + 0.45 * (cur_step / plan["total_steps"])), desc=f"Epoca {cur_ep}/{epochs}")
                 yield emit("Training in corso", cur_ep, cur_batch, cur_step, eta_val, "", cached_losses, lowest_gen)
 
@@ -2339,6 +2375,20 @@ button:active {{
     border: 1.5px solid #f2b5cc !important;
 }}
 
+.journal-log-html {{
+    font-family: "Courier New", Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    background: #fff7fa;
+    color: #7a345a;
+    border: 1.5px solid #f2b5cc;
+    padding: 8px 10px;
+    height: 240px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}}
+
 /* Roaming Pixel-Art Sprites */
 .chibi-stage {{
     position: fixed;
@@ -2685,11 +2735,8 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                         train_progress_md = gr.Markdown("**Avanzamento Live**: in attesa di avvio...")
                         train_diag_md = gr.Markdown("**Pannello Diagnostico**: in attesa di avvio...")
 
-                        train_log_box = gr.Textbox(
-                            label="Log Training RVC v2 (Live)",
-                            lines=10,
-                            interactive=False,
-                            elem_classes=["journal-log"],
+                        train_log_box = gr.HTML(
+                            value='<div class="journal-log-html"><div style="color:#8f5c7a;">Console training pronta...</div></div>',
                         )
 
                 # TAB 4: Text to Speech (TTS + RVC)

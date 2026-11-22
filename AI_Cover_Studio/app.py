@@ -2406,6 +2406,8 @@ footer {{
 }}
 
 /* Keep all 4 notebook tabs on a single horizontal line */
+.gradio-container .journal-main .tab-wrapper,
+.gradio-container .journal-main .tab-container,
 .gradio-container .journal-main .tab-nav,
 .gradio-container .journal-main [role="tablist"] {{
     display: flex !important;
@@ -2415,12 +2417,13 @@ footer {{
     overflow: visible !important;
 }}
 
+.gradio-container .journal-main .tab-container button,
 .gradio-container .journal-main .tab-nav button,
 .gradio-container .journal-main [role="tablist"] button,
 .gradio-container .journal-main button[role="tab"] {{
-    font-size: 11.5px !important;
-    padding: 5px 7px !important;
-    margin: 0 2px 0 0 !important;
+    font-size: 12px !important;
+    padding: 6px 8px !important;
+    margin: 0 !important;
     min-width: 0 !important;
     white-space: nowrap !important;
     flex-shrink: 0 !important;
@@ -3132,7 +3135,7 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                         )
 
                 # TAB 3: Crea Voce (Training RVC v2)
-                with gr.Tab("Crea Voce (Training)"):
+                with gr.Tab("Crea Voce"):
                     with gr.Column(elem_classes=["journal-subbox"]):
                         gr.HTML(
                             '<p style="font-size:12px;margin:0 0 8px 0;">Addestra un nuovo modello vocale <b>RVC v2</b> dai tuoi file audio. '

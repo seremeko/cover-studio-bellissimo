@@ -2490,51 +2490,52 @@ button:active {{
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
     width: 100%;
-    padding: 10px 10px 12px 10px;
-    background: linear-gradient(180deg, #fffafd 0%, #ffe0ee 52%, #ffc8e1 100%);
-    border: 2px solid #e07ba4;
-    border-radius: 18px;
-    box-shadow: 4px 4px 0px rgba(242, 158, 192, 0.65), inset 0 2px 0 #ffffff;
+    padding: 10px 12px 12px 12px;
+    background: linear-gradient(180deg, #fffdfd 0%, #ffe6f1 100%);
+    border: 2px solid #9e4374;
+    border-radius: 3px;
+    box-shadow: 4px 4px 0px #f29ec0, inset 0 2px 0 #ffffff;
     font-family: "Courier New", Consolas, monospace;
     box-sizing: border-box;
+    image-rendering: pixelated;
 }}
 
 .ipod-charm {{
     position: absolute;
-    left: -10px;
-    top: 12px;
+    left: -12px;
+    top: 10px;
     display: flex;
     flex-direction: column;
     align-items: center;
     pointer-events: none;
+    z-index: 2;
 }}
 
 .ipod-charm-chain {{
     width: 3px;
     height: 12px;
-    border-left: 2.5px dotted #e07ba4;
+    border-left: 2.5px dotted #9e4374;
 }}
 
 .ipod-screen {{
     width: 100%;
-    background: linear-gradient(180deg, #fff7fb 0%, #ffeaf4 100%);
-    border: 2px solid #9e4374;
-    border-radius: 9px;
-    padding: 7px 8px;
-    box-shadow: inset 0 2px 4px rgba(158, 67, 116, 0.14);
+    background: transparent;
+    border: none;
+    padding: 0;
+    box-shadow: none;
     box-sizing: border-box;
     overflow: hidden;
 }}
 
 .ipod-menu-list {{
-    max-height: 76px;
+    max-height: 88px;
     overflow-y: auto;
-    background: #fffafd;
-    border: 1px solid #f29ec0;
-    margin: 4px 0;
-    padding: 2px;
+    background: #fffdf8;
+    border: 2px solid #9e4374;
+    border-radius: 2px;
+    margin: 6px 0;
+    padding: 3px;
     font-size: 10px;
     box-sizing: border-box;
 }}
@@ -2542,9 +2543,14 @@ button:active {{
 .ipod-menu-item {{
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 2px 4px;
-    color: #7a2652;
+    gap: 6px;
+    padding: 3px 4px;
+    color: #5c193d;
+    border-bottom: 1px dashed #f29ec0;
+}}
+
+.ipod-menu-item:last-child {{
+    border-bottom: none;
 }}
 
 .ipod-menu-item:hover {{
@@ -2555,6 +2561,7 @@ button:active {{
     flex: 1;
     min-width: 0;
     cursor: pointer;
+    font-weight: bold;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2565,33 +2572,33 @@ button:active {{
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 16px;
-    border-radius: 3px;
-    border: 1px solid #d982a8;
+    width: 20px;
+    height: 18px;
+    border-radius: 2px;
+    border: 1.5px solid #9e4374;
     background: #fff7fb;
     color: #9e4374 !important;
     text-decoration: none !important;
     cursor: pointer;
+    box-shadow: 1px 1px 0 #f29ec0;
 }}
 
 .ipod-menu-dl:hover {{
     background: #ff6ea9;
     color: #ffffff !important;
-    border-color: #9e4374;
 }}
 
 .ipod-vol-row {{
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     width: 100%;
     max-width: 100%;
-    margin-top: 6px;
-    padding: 4px 6px;
-    background: #fffafd;
-    border: 1px dashed #f29ec0;
-    border-radius: 5px;
+    margin-top: 8px;
+    padding: 5px 8px;
+    background: #fffdf8;
+    border: 2px dashed #f29ec0;
+    border-radius: 2px;
     box-sizing: border-box;
     overflow: hidden;
 }}
@@ -2603,10 +2610,10 @@ button:active {{
     min-width: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
-    height: 6px;
+    height: 8px;
     background: #ffd1e3;
-    border: 1px solid #d982a8;
-    border-radius: 999px;
+    border: 1.5px solid #9e4374;
+    border-radius: 0;
     outline: none;
     margin: 0 !important;
     padding: 0 !important;
@@ -2617,30 +2624,30 @@ button:active {{
 .ipod-vol-slider::-webkit-slider-thumb {{
     -webkit-appearance: none;
     appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: #ff6ea9;
-    border: 1.5px solid #9e4374;
+    width: 10px;
+    height: 16px;
+    border-radius: 2px;
+    background: #ff85b3;
+    border: 2px solid #9e4374;
     cursor: pointer;
 }}
 
 .ipod-vol-slider::-moz-range-thumb {{
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: #ff6ea9;
-    border: 1.5px solid #9e4374;
+    width: 10px;
+    height: 16px;
+    border-radius: 2px;
+    background: #ff85b3;
+    border: 2px solid #9e4374;
     cursor: pointer;
 }}
 
 .ipod-vol-pct {{
     flex-shrink: 0;
-    min-width: 28px;
+    min-width: 30px;
     text-align: right;
-    font-size: 9px;
-    font-weight: bold;
-    color: #7a2652;
+    font-size: 10px;
+    font-weight: 900;
+    color: #5c193d;
 }}
 
 .ipod-dl {{
@@ -2651,15 +2658,16 @@ button:active {{
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 1px dashed #f29ec0;
-    padding-bottom: 3px;
-    margin-bottom: 5px;
+    border-bottom: 2px dashed #f29ec0;
+    padding-bottom: 5px;
+    margin-bottom: 8px;
 }}
 
 .ipod-screen-body {{
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
+    margin-bottom: 6px;
 }}
 
 .ipod-info {{
@@ -2671,12 +2679,12 @@ button:active {{
     font-size: 11px;
     font-weight: 900;
     letter-spacing: 1px;
-    color: #9e4374;
+    color: #5c193d;
 }}
 
 .ipod-track-title {{
     font-size: 12px;
-    font-weight: bold;
+    font-weight: 900;
     color: #5c193d;
     white-space: nowrap;
     overflow: hidden;
@@ -2685,37 +2693,39 @@ button:active {{
 }}
 
 .ipod-time {{
-    font-size: 10px;
-    color: #8f5c7a;
-    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: bold;
+    color: #7a2652;
 }}
 
 .ipod-progress {{
     display: grid;
     grid-template-columns: repeat(14, minmax(0, 1fr));
-    gap: 2px;
+    gap: 3px;
     width: 100%;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     cursor: pointer;
     box-sizing: border-box;
 }}
 
 .ipod-seg {{
     width: 100%;
-    height: 8px;
-    background: #fffafd;
-    border: 1px solid #d982a8;
+    height: 12px;
+    background: #fffdf5;
+    border: 1.5px solid #d982a8;
+    border-radius: 0;
     box-sizing: border-box;
 }}
 
 .ipod-seg.filled {{
     background: #ff6ea9;
+    border-color: #9e4374;
 }}
 
 .ipod-mini-btns {{
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 4px;
+    gap: 6px;
     width: 100%;
     box-sizing: border-box;
 }}
@@ -2726,30 +2736,31 @@ button:active {{
     justify-content: center;
     width: 100%;
     min-width: 0;
-    height: 24px;
+    height: 28px;
     padding: 0 2px;
     margin: 0;
     box-sizing: border-box;
-    background: linear-gradient(180deg, #fffafd 0%, #ffd1e3 100%);
-    border: 1.5px solid #9e4374;
-    border-radius: 4px;
-    color: #7a2652 !important;
+    background: linear-gradient(180deg, #fffdf5 0%, #ffe6f0 100%);
+    border: 2px solid #9e4374;
+    border-radius: 3px;
+    color: #5c193d !important;
     font-family: "Courier New", monospace;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 900;
     line-height: 1;
     text-decoration: none !important;
     cursor: pointer;
-    box-shadow: 1px 1px 0 #e07ba4;
+    box-shadow: 0 2px 0 #9e4374;
     white-space: nowrap;
 }}
 
 .ipod-btn:hover {{
-    background: linear-gradient(180deg, #ffffff 0%, #ffb8d4 100%);
+    background: linear-gradient(180deg, #ffffff 0%, #ffd1e3 100%);
 }}
 
 .ipod-btn:active {{
-    transform: translate(1px, 1px);
+    transform: translateY(2px);
+    box-shadow: none;
 }}
 
 .ipod-pl-tag {{
@@ -2945,7 +2956,7 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
     gr.HTML(HEADER_HTML)
 
     with gr.Row(equal_height=False):
-        with gr.Column(scale=1, min_width=240):
+        with gr.Column(scale=1, min_width=300):
             ipod_player_html = gr.HTML(render_ipod_player_html())
             with gr.Column(elem_classes=["journal-sidebar"]):
                 gr.HTML(SIDEBAR_HTML)

@@ -1651,8 +1651,8 @@ HEADER_HTML = """
 SIDEBAR_HTML = f"""
 <div class="sidebar-heading">ABOUT</div>
 <p class="sidebar-text">
-    ciao! sono <b>Meko</b> e questo e il mio studio personale di <b>AI Cover</b>.
-    nasce per creare cover Vocaloid e personalizzate in locale da YouTube o da file MP3/MP4 sul PC, senza passare da servizi online.
+    ciao! sono <b>Meko</b> e questo è il mio studio personale di <b>AI Cover</b>.
+    Nasce per creare cover Vocaloid e personalizzate in locale da YouTube o da file MP3/MP4 sul PC, senza passare da servizi online.
 </p>
 
 <div class="sidebar-heading">HOW IT WORKS</div>

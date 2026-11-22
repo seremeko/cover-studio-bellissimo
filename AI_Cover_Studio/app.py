@@ -3,11 +3,15 @@ import re
 import sys
 import html
 import json
+import math
+import time
+import queue
 import asyncio
 import random
 import base64
 import shutil
 import zipfile
+import threading
 import subprocess
 import urllib.request
 import urllib.parse
@@ -926,8 +930,242 @@ def install_from_direct_url(direct_url: str, custom_name: str, progress=gr.Progr
 
 
 # ---------------------------------------------------------------------------
-# RVC v2 Voice Training Pipeline (via rvc_cli)
+# RVC v2 Voice Training Pipeline (Plan, Live Progress, Diagnostics, Resume, Precision)
 # ---------------------------------------------------------------------------
+TRAINING_CANCEL_EVENT = threading.Event()
+ACTIVE_TRAIN_PROC: subprocess.Popen | None = None
+
+
+def cancel_training():
+    global ACTIVE_TRAIN_PROC
+    TRAINING_CANCEL_EVENT.set()
+    if ACTIVE_TRAIN_PROC is not None and ACTIVE_TRAIN_PROC.poll() is None:
+        try:
+            ACTIVE_TRAIN_PROC.terminate()
+        except Exception:
+            pass
+    return "[ANNULLATO] Richiesta di interruzione inviata. I checkpoint salvati restano intatti."
+
+
+def _fmt_duration(seconds: float) -> str:
+    s = max(0, int(round(seconds)))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{sec:02d}"
+    return f"{m:02d}:{sec:02d}"
+
+
+def resolve_training_precision(req_precision: str) -> tuple[str, str]:
+    req = (req_precision or "Auto").upper()
+    has_cuda = torch.cuda.is_available()
+    if has_cuda:
+        if req == "FP32":
+            return "fp32", "FP32 (CUDA)"
+        if req == "FP16":
+            return "fp16", "FP16 (CUDA)"
+        return "fp16", "FP16 (CUDA Auto)"
+    return "fp32", f"FP32 (CPU fallback - richiesto {req})"
+
+
+def _set_rvc_precision(precision_key: str):
+    prev = os.getcwd()
+    try:
+        os.chdir(RVC_DIR)
+        if RVC_DIR not in sys.path:
+            sys.path.insert(0, RVC_DIR)
+        from rvc.lib.user_config import load_config, save_config
+        cfg = load_config()
+        cfg["precision"] = precision_key
+        save_config(cfg)
+    except Exception:
+        pass
+    finally:
+        os.chdir(prev)
+
+
+def _get_gpu_and_vram_info() -> tuple[str, str]:
+    if not torch.cuda.is_available():
+        return "CPU (nessuna GPU CUDA)", "N/A (CPU)"
+    try:
+        name = torch.cuda.get_device_name(0)
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
+            text=True,
+            timeout=3,
+        ).strip().splitlines()[0]
+        used_mb, total_mb = [x.strip() for x in out.split(",")]
+        return f"GPU 0: {name}", f"{used_mb} MB / {total_mb} MB"
+    except Exception:
+        try:
+            name = torch.cuda.get_device_name(0)
+            alloc_mb = torch.cuda.memory_allocated(0) / (1024 * 1024)
+            return f"GPU 0: {name}", f"{alloc_mb:.1f} MB (alloc)"
+        except Exception:
+            return "CUDA GPU", "N/A"
+
+
+def compute_training_plan(safe_name: str, batch_size: int, total_epochs: int) -> dict:
+    sliced_dir = os.path.join(RVC_DIR, "logs", safe_name, "sliced_audios")
+    total_dur = 0.0
+    n_segments = 0
+    if os.path.isdir(sliced_dir):
+        for fn in os.listdir(sliced_dir):
+            if fn.lower().endswith(".wav"):
+                fp = os.path.join(sliced_dir, fn)
+                try:
+                    info = sf.info(fp)
+                    total_dur += info.duration
+                    n_segments += 1
+                except Exception:
+                    pass
+    batches_per_epoch = max(1, math.ceil(n_segments / max(1, batch_size))) if n_segments > 0 else 0
+    total_steps = batches_per_epoch * max(1, total_epochs)
+    return {
+        "duration_s": total_dur,
+        "segments": n_segments,
+        "batches_per_epoch": batches_per_epoch,
+        "total_steps": total_steps,
+    }
+
+
+def _read_latest_tb_losses(exp_dir: str) -> dict[str, float]:
+    losses: dict[str, float] = {}
+    try:
+        from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+        event_files = [
+            os.path.join(exp_dir, f)
+            for f in os.listdir(exp_dir)
+            if f.startswith("events.out.tfevents")
+        ]
+        if not event_files:
+            return losses
+        latest_ev = max(event_files, key=os.path.getmtime)
+        ea = EventAccumulator(latest_ev, size_guidance={"scalars": 20})
+        ea.Reload()
+        tags = ea.Tags().get("scalars", [])
+        for tag in ("loss/g/total", "loss/g/adv", "loss/g/mel", "loss/d/total"):
+            if tag in tags:
+                vals = ea.Scalars(tag)
+                if vals:
+                    losses[tag] = float(vals[-1].value)
+    except Exception:
+        pass
+    return losses
+
+
+def inspect_resumable_checkpoints(model_name: str) -> str:
+    safe_name = sanitize_name((model_name or "").strip(), default="")
+    if not safe_name:
+        return "Inserisci il nome della voce per verificare i checkpoint salvati."
+    exp_dir = os.path.join(RVC_DIR, "logs", safe_name)
+    if not os.path.isdir(exp_dir):
+        return f"Nessuna cartella di training trovata per '{safe_name}'."
+
+    g_files = sorted(
+        [os.path.join(exp_dir, f) for f in os.listdir(exp_dir) if f.startswith("G_") and f.endswith(".pth")],
+        key=os.path.getmtime,
+    )
+    d_files = sorted(
+        [os.path.join(exp_dir, f) for f in os.listdir(exp_dir) if f.startswith("D_") and f.endswith(".pth")],
+        key=os.path.getmtime,
+    )
+
+    state_path = os.path.join(exp_dir, "training_state.json")
+    saved_state = {}
+    if os.path.exists(state_path):
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                saved_state = json.load(f)
+        except Exception:
+            pass
+
+    if not g_files or not d_files:
+        return f"Nessun checkpoint completo (G + D) trovato per '{safe_name}'."
+
+    latest_g = g_files[-1]
+    latest_d = d_files[-1]
+    last_epoch = saved_state.get("last_epoch", "?")
+    try:
+        ckpt = torch.load(latest_g, map_location="cpu", weights_only=False)
+        last_epoch = ckpt.get("iteration", last_epoch)
+    except Exception:
+        pass
+
+    sr_info = saved_state.get("sample_rate", "?")
+    bs_info = saved_state.get("batch_size", "?")
+    prec_info = saved_state.get("precision", "?")
+    tot_info = saved_state.get("total_epochs", "?")
+    return (
+        f"Checkpoint recuperabile trovato per '{safe_name}'!\n"
+        f"- Ultima epoca salvata: {last_epoch} (target precedente: {tot_info})\n"
+        f"- Generatore: {os.path.basename(latest_g)} | Discriminatore: {os.path.basename(latest_d)}\n"
+        f"- Impostazioni salvate: SR={sr_info} Hz, Batch={bs_info}, Precisione={prec_info}\n"
+        f"- Totale coppie G/D conservate: {min(len(g_files), len(d_files))}"
+    )
+
+
+def _format_plan_md(plan: dict, batch_size: int, total_epochs: int) -> str:
+    if plan["segments"] == 0:
+        return "Piano di training: in attesa del preprocessing..."
+    return (
+        f"**Piano di Training**\n"
+        f"- Durata audio utilizzabile: `{_fmt_duration(plan['duration_s'])}` ({plan['duration_s']:.1f} s)\n"
+        f"- Numero di segmenti: `{plan['segments']}`\n"
+        f"- Batch effettivi per epoca: `{plan['batches_per_epoch']}` (batch size = `{batch_size}`)\n"
+        f"- Step totali stimati: `{plan['total_steps']}` ({total_epochs} epoche)"
+    )
+
+
+def _format_live_progress_md(
+    phase: str,
+    cur_epoch: int,
+    tot_epochs: int,
+    cur_batch: int,
+    tot_batches: int,
+    cur_step: int,
+    tot_steps: int,
+    elapsed_s: float,
+    eta_s: float | None,
+    error_cause: str = "",
+) -> str:
+    pct = 0.0
+    if tot_steps > 0 and cur_step > 0:
+        pct = min(100.0, (cur_step / tot_steps) * 100.0)
+    elif tot_epochs > 0 and cur_epoch > 0:
+        pct = min(100.0, (cur_epoch / tot_epochs) * 100.0)
+    eta_str = _fmt_duration(eta_s) if eta_s is not None else "calcolo in corso..."
+    txt = (
+        f"**Avanzamento Live**\n"
+        f"- Fase corrente: `{phase}`\n"
+        f"- Epoca: `{cur_epoch} / {tot_epochs}` | Batch: `{cur_batch} / {tot_batches}` | Step: `{cur_step} / {tot_steps}`\n"
+        f"- Completamento: `{pct:.1f}%` | Tempo trascorso: `{_fmt_duration(elapsed_s)}` | Tempo residuo stimato: `{eta_str}`"
+    )
+    if error_cause:
+        txt += f"\n- **Errore rilevato**: `{error_cause}`"
+    return txt
+
+
+def _format_diag_md(
+    gpu_name: str,
+    eff_prec: str,
+    vram_str: str,
+    losses: dict[str, float],
+    lowest_gen: str = "",
+) -> str:
+    g_tot = f"{losses['loss/g/total']:.4f}" if "loss/g/total" in losses else (lowest_gen or "in attesa...")
+    g_adv = f"{losses['loss/g/adv']:.4f}" if "loss/g/adv" in losses else "-"
+    g_mel = f"{losses['loss/g/mel']:.4f}" if "loss/g/mel" in losses else "-"
+    d_tot = f"{losses['loss/d/total']:.4f}" if "loss/d/total" in losses else "-"
+    return (
+        f"**Pannello Diagnostico**\n"
+        f"- Dispositivo: `{gpu_name}` | Precisione effettiva: `{eff_prec}`\n"
+        f"- VRAM usata: `{vram_str}`\n"
+        f"- Loss Generatore (totale / adv / mel): `{g_tot}` / `{g_adv}` / `{g_mel}`\n"
+        f"- Loss Discriminatore (totale): `{d_tot}`"
+    )
+
+
 def train_rvc_voice(
     model_name: str,
     dataset_files: list[str] | None,
@@ -936,21 +1174,30 @@ def train_rvc_voice(
     total_epochs: int,
     batch_size: int,
     save_every_epoch: int,
+    precision_req: str,
+    resume_from_ckpt: bool,
     progress=gr.Progress(),
 ):
-    logs = []
+    global ACTIVE_TRAIN_PROC
+    TRAINING_CANCEL_EVENT.clear()
+    logs: list[str] = []
+    t_start = time.time()
 
     def log(msg: str):
         logs.append(msg)
-        return "\n".join(logs)
+        return "\n".join(logs[-120:])
 
     safe_name = sanitize_name((model_name or "").strip(), default="")
     if not safe_name:
-        yield log("[ERRORE] Inserisci un nome valido per la nuova voce."), gr.update(), gr.update()
-        return
-
-    if not dataset_files:
-        yield log("[ERRORE] Carica almeno un file audio/video per il dataset."), gr.update(), gr.update()
+        yield (
+            log("[ERRORE] Inserisci un nome valido per la nuova voce."),
+            "**Piano di Training**: in attesa...",
+            _format_live_progress_md("Errore input", 0, 0, 0, 0, 0, 0, 0, None, "Nome voce mancante"),
+            "Nessuna diagnostica disponibile.",
+            inspect_resumable_checkpoints(""),
+            gr.update(),
+            gr.update(),
+        )
         return
 
     sr = int(sample_rate_str)
@@ -959,54 +1206,89 @@ def train_rvc_voice(
     save_every = min(epochs, max(1, int(save_every_epoch)))
     cpu_n = os.cpu_count() or 4
     gpu_arg = 0 if torch.cuda.is_available() else "-"
+    prec_key, eff_prec_label = resolve_training_precision(precision_req)
+    gpu_label, vram_label = _get_gpu_and_vram_info()
 
-    datasets_root = os.path.join(APP_DIR, "datasets", safe_name)
-    raw_dir = os.path.join(datasets_root, "raw")
-    clean_dir = os.path.join(datasets_root, "vocals")
-    os.makedirs(raw_dir, exist_ok=True)
-    os.makedirs(clean_dir, exist_ok=True)
+    exp_dir = os.path.join(RVC_DIR, "logs", safe_name)
+    state_path = os.path.join(exp_dir, "training_state.json")
+    plan = {"duration_s": 0.0, "segments": 0, "batches_per_epoch": 0, "total_steps": 0}
 
-    progress(0.05, desc="Preparazione dataset...")
-    yield log(f"[TRAIN 1/5] Preparazione dataset per '{safe_name}' (device={'GPU' if gpu_arg == 0 else 'CPU'})..."), gr.update(), gr.update()
-
-    converted_wavs = []
-    for idx, fpath in enumerate(dataset_files):
-        if not fpath or not os.path.exists(fpath):
-            continue
-        out_wav = os.path.join(raw_dir, f"clip_{idx:03d}.wav")
-        try:
-            (
-                ffmpeg
-                .input(fpath)
-                .output(out_wav, acodec="pcm_s16le", ar=sr, ac=1)
-                .overwrite_output()
-                .run(cmd=FFMPEG_EXE, quiet=True)
-            )
-            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 1024:
-                converted_wavs.append(out_wav)
-        except Exception as e:
-            yield log(f"[AVVISO] Impossibile convertire {os.path.basename(fpath)}: {e}"), gr.update(), gr.update()
-
-    if not converted_wavs:
-        yield log("[ERRORE] Nessun file audio valido convertito per il training."), gr.update(), gr.update()
-        return
-
-    if extract_vocals_demucs:
-        progress(0.15, desc="Estrazione voce con Demucs...")
-        yield log(f"[TRAIN 1B/5] Separazione voce con Demucs su {len(converted_wavs)} file..."), gr.update(), gr.update()
-        sep_dir = os.path.join(datasets_root, "separated")
-        subprocess.run(
-            [DEMUCS_EXE, "--two-stems=vocals", "-n", "htdemucs", "-j", str(cpu_n), "-o", sep_dir, *converted_wavs],
-            check=True,
+    def emit(phase: str, cur_ep: int = 0, cur_b: int = 0, cur_st: int = 0, eta: float | None = None, err: str = "", losses: dict | None = None, lowest: str = "", v1_upd=gr.update(), v2_upd=gr.update()):
+        nonlocal gpu_label, vram_label
+        gpu_label, vram_label = _get_gpu_and_vram_info()
+        return (
+            "\n".join(logs[-120:]),
+            _format_plan_md(plan, bs, epochs),
+            _format_live_progress_md(phase, cur_ep, epochs, cur_b, plan["batches_per_epoch"], cur_st, plan["total_steps"], time.time() - t_start, eta, err),
+            _format_diag_md(gpu_label, eff_prec_label, vram_label, losses or {}, lowest),
+            inspect_resumable_checkpoints(safe_name),
+            v1_upd,
+            v2_upd,
         )
-        for idx, wpath in enumerate(converted_wavs):
-            stem = Path(wpath).stem
-            v_src = os.path.join(sep_dir, "htdemucs", stem, "vocals.wav")
-            if os.path.exists(v_src):
-                shutil.copy2(v_src, os.path.join(clean_dir, f"vocal_{idx:03d}.wav"))
-    else:
-        for idx, wpath in enumerate(converted_wavs):
-            shutil.copy2(wpath, os.path.join(clean_dir, f"vocal_{idx:03d}.wav"))
+
+    can_resume_existing = (
+        resume_from_ckpt
+        and os.path.isdir(exp_dir)
+        and os.path.exists(os.path.join(exp_dir, "filelist.txt"))
+        and os.path.exists(os.path.join(exp_dir, "config.json"))
+    )
+
+    if not can_resume_existing:
+        if not dataset_files:
+            log("[ERRORE] Carica almeno un file audio/video per il dataset (oppure riprendi da un checkpoint esistente).")
+            yield emit("Errore dataset", err="Nessun file dataset caricato")
+            return
+
+        datasets_root = os.path.join(APP_DIR, "datasets", safe_name)
+        raw_dir = os.path.join(datasets_root, "raw")
+        clean_dir = os.path.join(datasets_root, "vocals")
+        os.makedirs(raw_dir, exist_ok=True)
+        os.makedirs(clean_dir, exist_ok=True)
+
+        progress(0.05, desc="Preparazione dataset...")
+        log(f"[TRAIN 1/5] Preparazione dataset per '{safe_name}' (device={gpu_label}, precisione={eff_prec_label})...")
+        yield emit("Preparazione dataset")
+
+        converted_wavs = []
+        for idx, fpath in enumerate(dataset_files):
+            if not fpath or not os.path.exists(fpath):
+                continue
+            out_wav = os.path.join(raw_dir, f"clip_{idx:03d}.wav")
+            try:
+                (
+                    ffmpeg
+                    .input(fpath)
+                    .output(out_wav, acodec="pcm_s16le", ar=sr, ac=1)
+                    .overwrite_output()
+                    .run(cmd=FFMPEG_EXE, quiet=True)
+                )
+                if os.path.exists(out_wav) and os.path.getsize(out_wav) > 1024:
+                    converted_wavs.append(out_wav)
+            except Exception as e:
+                log(f"[AVVISO] Impossibile convertire {os.path.basename(fpath)}: {e}")
+
+        if not converted_wavs:
+            log("[ERRORE] Nessun file audio valido convertito.")
+            yield emit("Errore dataset", err="Conversione file dataset fallita")
+            return
+
+        if extract_vocals_demucs:
+            progress(0.12, desc="Estrazione voce con Demucs...")
+            log(f"[TRAIN 1B/5] Separazione voce con Demucs su {len(converted_wavs)} file...")
+            yield emit("Separazione Demucs")
+            sep_dir = os.path.join(datasets_root, "separated")
+            subprocess.run(
+                [DEMUCS_EXE, "--two-stems=vocals", "-n", "htdemucs", "-j", str(cpu_n), "-o", sep_dir, *converted_wavs],
+                check=True,
+            )
+            for idx, wpath in enumerate(converted_wavs):
+                stem = Path(wpath).stem
+                v_src = os.path.join(sep_dir, "htdemucs", stem, "vocals.wav")
+                if os.path.exists(v_src):
+                    shutil.copy2(v_src, os.path.join(clean_dir, f"vocal_{idx:03d}.wav"))
+        else:
+            for idx, wpath in enumerate(converted_wavs):
+                shutil.copy2(wpath, os.path.join(clean_dir, f"vocal_{idx:03d}.wav"))
 
     prev_cwd = os.getcwd()
     try:
@@ -1014,67 +1296,222 @@ def train_rvc_voice(
         if RVC_DIR not in sys.path:
             sys.path.insert(0, RVC_DIR)
         import core as rvc_core
+        from rvc.lib.tools.pretrained_selector import pretrained_selector
 
-        progress(0.25, desc="Verifica prerequisiti HiFi-GAN...")
-        yield log("[TRAIN 2/5] Verifica prerequisiti RVC v2 (HiFi-GAN pretrained)..."), gr.update(), gr.update()
+        _set_rvc_precision(prec_key)
+        progress(0.20, desc="Verifica prerequisiti HiFi-GAN...")
+        log("[TRAIN 2/5] Verifica prerequisiti RVC v2 (HiFi-GAN pretrained)...")
+        yield emit("Verifica prerequisiti")
         rvc_core.run_prerequisites_script(pretraineds_hifigan=True, models=False, exe=False)
 
-        progress(0.35, desc="Preprocessing e taglio clip...")
-        yield log("[TRAIN 3/5] Preprocessing dataset (taglio automatico)..."), gr.update(), gr.update()
-        msg_prep = rvc_core.run_preprocess_script(
-            model_name=safe_name,
-            dataset_path=clean_dir,
-            sample_rate=sr,
-            cpu_cores=cpu_n,
-            cut_preprocess="Automatic",
-            process_effects=False,
-            chunk_len=3.0,
-            overlap_len=0.3,
-            normalization_mode="none",
-        )
-        yield log(f"  -> {msg_prep}"), gr.update(), gr.update()
+        if not can_resume_existing:
+            progress(0.30, desc="Preprocessing e taglio clip...")
+            log("[TRAIN 3/5] Preprocessing dataset (taglio automatico)...")
+            yield emit("Preprocessing")
+            msg_prep = rvc_core.run_preprocess_script(
+                model_name=safe_name,
+                dataset_path=clean_dir,
+                sample_rate=sr,
+                cpu_cores=cpu_n,
+                cut_preprocess="Automatic",
+                process_effects=False,
+                chunk_len=3.0,
+                overlap_len=0.3,
+                normalization_mode="none",
+            )
+            log(f"  -> {msg_prep}")
 
-        progress(0.50, desc="Estrazione F0 (rmvpe) e feature (contentvec)...")
-        yield log("[TRAIN 4/5] Estrazione pitch (rmvpe) e feature (contentvec)..."), gr.update(), gr.update()
-        msg_ext = rvc_core.run_extract_script(
-            model_name=safe_name,
-            f0_method="rmvpe",
-            cpu_cores=cpu_n,
-            gpu=gpu_arg,
-            sample_rate=sr,
-            embedder_model="contentvec",
-            include_mutes=2,
-        )
-        yield log(f"  -> {msg_ext}"), gr.update(), gr.update()
+            plan = compute_training_plan(safe_name, bs, epochs)
+            yield emit("Piano di training calcolato")
 
-        progress(0.65, desc=f"Training modello ({epochs} epoche)...")
-        yield log(f"[TRAIN 5/5] Avvio training RVC v2 ({epochs} epoche, batch={bs}, sr={sr}). Attendere..."), gr.update(), gr.update()
-        msg_tr = rvc_core.run_train_script(
-            model_name=safe_name,
-            save_every_epoch=save_every,
-            save_only_latest=True,
-            save_every_weights=True,
-            total_epoch=epochs,
-            sample_rate=sr,
-            batch_size=bs,
-            gpu=gpu_arg,
-            pretrained=True,
-            cleanup=False,
-            index_algorithm="Auto",
+            progress(0.45, desc="Estrazione F0 (rmvpe) e feature (contentvec)...")
+            log("[TRAIN 4/5] Estrazione pitch (rmvpe) e feature (contentvec)...")
+            yield emit("Estrazione pitch e feature")
+            msg_ext = rvc_core.run_extract_script(
+                model_name=safe_name,
+                f0_method="rmvpe",
+                cpu_cores=cpu_n,
+                gpu=gpu_arg,
+                sample_rate=sr,
+                embedder_model="contentvec",
+                include_mutes=2,
+            )
+            log(f"  -> {msg_ext}")
+        else:
+            plan = compute_training_plan(safe_name, bs, epochs)
+            log(f"[RIPRESA] Trovati file preprocessati per '{safe_name}'. Salto preprocessing ed estrazione.")
+            yield emit("Ripresa da checkpoint")
+
+        os.makedirs(exp_dir, exist_ok=True)
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "model_name": safe_name,
+                    "sample_rate": sr,
+                    "batch_size": bs,
+                    "total_epochs": epochs,
+                    "save_every_epoch": save_every,
+                    "precision": eff_prec_label,
+                    "last_epoch": 0,
+                    "updated_at": datetime.now().isoformat(),
+                },
+                f,
+                indent=2,
+            )
+
+        pg, pd = pretrained_selector("HiFi-GAN", sr)
+        train_script_path = os.path.join(RVC_DIR, "rvc", "train", "train.py")
+        cmd = [
+            sys.executable,
+            "-u",
+            train_script_path,
+            safe_name,
+            str(save_every),
+            str(epochs),
+            str(pg),
+            str(pd),
+            str(gpu_arg),
+            str(bs),
+            str(sr),
+            "False",   # save_only_latest=False -> preserves all G_*.pth & D_*.pth checkpoints!
+            "True",    # save_every_weights=True
+            "False",   # cache_data_in_gpu
+            "False",   # cleanup
+            "HiFi-GAN",
+            "False",   # checkpointing
+        ]
+
+        log(f"[TRAIN 5/5] Avvio training RVC v2: {epochs} epoche, batch={bs}, SR={sr}, precisione={eff_prec_label}, save_every={save_every}")
+        yield emit("Training in corso")
+
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        ACTIVE_TRAIN_PROC = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=env,
         )
-        yield log(f"  -> {msg_tr}"), gr.update(), gr.update()
+
+        line_q: queue.Queue[str | None] = queue.Queue()
+
+        def _reader():
+            assert ACTIVE_TRAIN_PROC.stdout is not None
+            for raw_line in ACTIVE_TRAIN_PROC.stdout:
+                line_q.put(raw_line.rstrip("\r\n"))
+            line_q.put(None)
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+        cur_ep = 0
+        cur_step = 0
+        cur_batch = 0
+        lowest_gen = ""
+        epoch_times: list[float] = []
+        last_ep_t = time.time()
+        last_diag_t = 0.0
+        cached_losses: dict[str, float] = {}
+        last_err_line = ""
+        stream_done = False
+
+        while not stream_done:
+            if TRAINING_CANCEL_EVENT.is_set():
+                log("[ANNULLATO] Training interrotto dall'utente. Checkpoint conservati.")
+                yield emit("Annullato", cur_ep, cur_batch, cur_step, None, "Interrotto dall'utente", cached_losses, lowest_gen)
+                return
+
+            got_line = False
+            while True:
+                try:
+                    item = line_q.get_nowait()
+                except queue.Empty:
+                    break
+                if item is None:
+                    stream_done = True
+                    break
+                got_line = True
+                if item.strip():
+                    log(item)
+                if any(k in item for k in ("Error:", "Exception:", "CUDA out of memory", "RuntimeError", "Traceback")):
+                    last_err_line = item.strip()
+
+                ep_m = re.search(r"epoch=(\d+)\s*\|\s*step=(\d+)", item)
+                if ep_m:
+                    new_ep = int(ep_m.group(1))
+                    cur_step = int(ep_m.group(2))
+                    if new_ep > cur_ep:
+                        now_t = time.time()
+                        if cur_ep > 0:
+                            epoch_times.append(now_t - last_ep_t)
+                            epoch_times = epoch_times[-5:]
+                        last_ep_t = now_t
+                        cur_ep = new_ep
+                        cur_batch = plan["batches_per_epoch"]
+                        try:
+                            with open(state_path, "r+", encoding="utf-8") as sf_f:
+                                st_d = json.load(sf_f)
+                                st_d["last_epoch"] = cur_ep
+                                st_d["updated_at"] = datetime.now().isoformat()
+                                sf_f.seek(0)
+                                json.dump(st_d, sf_f, indent=2)
+                                sf_f.truncate()
+                        except Exception:
+                            pass
+                    lv_m = re.search(r"lowest_value=([0-9.]+)", item)
+                    if lv_m:
+                        lowest_gen = lv_m.group(1)
+
+                # Also parse tqdm-style batch progress if present (e.g. " 3/12 ")
+                b_m = re.search(r"\b(\d+)/(\d+)\b", item)
+                if b_m and "epoch=" not in item and "|" in item:
+                    b_cur, b_tot = int(b_m.group(1)), int(b_m.group(2))
+                    if b_tot > 0 and b_cur <= b_tot:
+                        cur_batch = b_cur
+
+            now_t = time.time()
+            if now_t - last_diag_t >= 2.5 or got_line:
+                if now_t - last_diag_t >= 2.5:
+                    cached_losses = _read_latest_tb_losses(exp_dir)
+                    last_diag_t = now_t
+                eta_val = None
+                if epoch_times and cur_ep < epochs:
+                    avg_ep = sum(epoch_times) / len(epoch_times)
+                    eta_val = avg_ep * max(0, epochs - cur_ep)
+                if plan["total_steps"] > 0 and cur_step > 0:
+                    progress(min(0.95, 0.50 + 0.45 * (cur_step / plan["total_steps"])), desc=f"Epoca {cur_ep}/{epochs}")
+                yield emit("Training in corso", cur_ep, cur_batch, cur_step, eta_val, "", cached_losses, lowest_gen)
+
+            if not stream_done:
+                time.sleep(0.5)
+
+        rc = ACTIVE_TRAIN_PROC.wait()
+        ACTIVE_TRAIN_PROC = None
+        if rc != 0:
+            cause = last_err_line or f"train.py terminato con codice di uscita {rc}"
+            log(f"[ERRORE TRAINING] {cause}")
+            yield emit("Errore training", cur_ep, cur_batch, cur_step, None, cause, cached_losses, lowest_gen)
+            return
+
+        log("[TRAIN] Generazione indice FAISS (.index)...")
+        yield emit("Generazione indice FAISS", cur_ep, cur_batch, cur_step, 0.0, "", cached_losses, lowest_gen)
+        msg_idx = rvc_core.run_index_script(safe_name, "Auto")
+        log(f"  -> {msg_idx}")
     except Exception as e:
-        yield log(f"[ERRORE TRAINING] {e}"), gr.update(), gr.update()
+        log(f"[ERRORE TRAINING] {e}")
+        yield emit("Errore", err=str(e))
         return
     finally:
+        ACTIVE_TRAIN_PROC = None
         os.chdir(prev_cwd)
 
-    # Locate generated .pth and .index in rvc_cli/logs/<safe_name>/
-    rvc_logs_dir = os.path.join(RVC_DIR, "logs", safe_name)
     pth_candidates = []
     idx_candidates = []
-    if os.path.isdir(rvc_logs_dir):
-        for r, _, fnames in os.walk(rvc_logs_dir):
+    if os.path.isdir(exp_dir):
+        for r, _, fnames in os.walk(exp_dir):
             for fn in fnames:
                 fp = os.path.join(r, fn)
                 if fn.lower().endswith(".pth") and not fn.startswith(("G_", "D_")):
@@ -1082,16 +1519,16 @@ def train_rvc_voice(
                 elif fn.lower().endswith(".index") and "trained" not in fn.lower():
                     idx_candidates.append(fp)
         if not idx_candidates:
-            for r, _, fnames in os.walk(rvc_logs_dir):
+            for r, _, fnames in os.walk(exp_dir):
                 for fn in fnames:
                     if fn.lower().endswith(".index"):
                         idx_candidates.append(os.path.join(r, fn))
 
     if not pth_candidates:
-        yield log(f"[ERRORE] Training terminato ma nessun file .pth trovato in {rvc_logs_dir}."), gr.update(), gr.update()
+        log(f"[ERRORE] Training terminato ma nessun file .pth esportato trovato in {exp_dir}.")
+        yield emit("Errore esportazione", err="File .pth finale non trovato")
         return
 
-    # Pick newest / highest epoch .pth
     best_pth = max(pth_candidates, key=os.path.getmtime)
     dest_dir = os.path.join(MODELS_DIR, "custom", safe_name)
     os.makedirs(dest_dir, exist_ok=True)
@@ -1104,8 +1541,16 @@ def train_rvc_voice(
     MODEL_REGISTRY, labels = scan_local_models()
     new_label = f"custom/{safe_name}" if f"custom/{safe_name}" in MODEL_REGISTRY else (labels[0] if labels else None)
     progress(1.0, desc="Voce addestrata e installata!")
-    yield (
-        log(f"[COMPLETATO] Nuova voce salvata in models/custom/{safe_name} e aggiunta ai menu!"),
+    log(f"[COMPLETATO] Nuova voce salvata in models/custom/{safe_name} e aggiunta ai menu!")
+    yield emit(
+        "Completato",
+        epochs,
+        plan["batches_per_epoch"],
+        plan["total_steps"],
+        0.0,
+        "",
+        _read_latest_tb_losses(exp_dir),
+        lowest_gen,
         gr.update(choices=labels, value=new_label),
         gr.update(choices=labels, value=new_label),
     )
@@ -2170,9 +2615,22 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                             '<p style="font-size:12px;margin:0 0 8px 0;">Addestra un nuovo modello vocale <b>RVC v2</b> dai tuoi file audio. '
                             '<i>Nota: su PC senza GPU NVIDIA il training gira su CPU ed e lento (consigliate 20-50 epoche su 2-5 min di voce pulita per i test).</i></p>'
                         )
-                        train_name_input = gr.Textbox(
-                            label="Nome della nuova voce",
-                            placeholder="Es: mia_voce_custom",
+                        with gr.Row():
+                            train_name_input = gr.Textbox(
+                                label="Nome della nuova voce",
+                                placeholder="Es: mia_voce_custom",
+                                scale=3,
+                            )
+                            train_check_ckpt_btn = gr.Button("Controlla Checkpoint", variant="secondary", scale=1)
+                        train_ckpt_status = gr.Textbox(
+                            label="Stato Checkpoint / Ripresa",
+                            value="Inserisci il nome della voce per verificare eventuali checkpoint G/D salvati.",
+                            lines=3,
+                            interactive=False,
+                        )
+                        train_resume_cb = gr.Checkbox(
+                            value=False,
+                            label="Riprendi training dall'ultimo checkpoint (salta preprocessing se gia fatto)",
                         )
                         train_files_input = gr.File(
                             label="File audio/video per il dataset (WAV / MP3 / MP4)",
@@ -2204,17 +2662,31 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                                 value=4,
                                 step=1,
                                 label="Batch Size",
+                                info="Indica quanti segmenti vengono elaborati insieme in ogni step; aumentarlo puo velocizzare ma richiede piu VRAM/RAM.",
                             )
                             train_save_slider = gr.Slider(
-                                minimum=5,
+                                minimum=1,
                                 maximum=100,
                                 value=10,
-                                step=5,
+                                step=1,
                                 label="Salva checkpoint ogni N epoche",
                             )
-                        train_btn = gr.Button("Avvia Training RVC v2", variant="primary")
+                        with gr.Accordion("Impostazioni Avanzate", open=False):
+                            train_precision_radio = gr.Radio(
+                                choices=["Auto", "FP16", "FP32"],
+                                value="Auto",
+                                label="Precisione (FP16 usa meno VRAM su GPU CUDA; su CPU si usa sempre FP32)",
+                            )
+                        with gr.Row():
+                            train_btn = gr.Button("Avvia / Riprendi Training RVC v2", variant="primary", scale=3)
+                            train_cancel_btn = gr.Button("Annulla Training", variant="secondary", scale=1)
+
+                        train_plan_md = gr.Markdown("**Piano di Training**: in attesa del preprocessing...")
+                        train_progress_md = gr.Markdown("**Avanzamento Live**: in attesa di avvio...")
+                        train_diag_md = gr.Markdown("**Pannello Diagnostico**: in attesa di avvio...")
+
                         train_log_box = gr.Textbox(
-                            label="Log Training RVC v2",
+                            label="Log Training RVC v2 (Live)",
                             lines=10,
                             interactive=False,
                             elem_classes=["journal-log"],
@@ -2360,6 +2832,18 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
         outputs=[hf_log_box, voice1_dd, voice2_dd],
     )
 
+    train_check_ckpt_btn.click(
+        fn=inspect_resumable_checkpoints,
+        inputs=[train_name_input],
+        outputs=[train_ckpt_status],
+    )
+
+    train_cancel_btn.click(
+        fn=cancel_training,
+        inputs=[],
+        outputs=[train_ckpt_status],
+    )
+
     train_btn.click(
         fn=train_rvc_voice,
         inputs=[
@@ -2370,8 +2854,18 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
             train_epochs_slider,
             train_batch_slider,
             train_save_slider,
+            train_precision_radio,
+            train_resume_cb,
         ],
-        outputs=[train_log_box, voice1_dd, voice2_dd],
+        outputs=[
+            train_log_box,
+            train_plan_md,
+            train_progress_md,
+            train_diag_md,
+            train_ckpt_status,
+            voice1_dd,
+            voice2_dd,
+        ],
     )
 
     tts_btn.click(

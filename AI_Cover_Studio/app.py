@@ -2406,7 +2406,8 @@ button:active {{
     position: fixed;
     left: 40px;
     top: 0px;
-    width: 44px;
+    width: auto;
+    height: 54px;
     opacity: 0.96;
     pointer-events: auto;
     cursor: grab;
@@ -2421,8 +2422,8 @@ button:active {{
 }}
 
 .chibi-pixel-sprite {{
-    width: 44px;
-    height: auto;
+    width: auto;
+    height: 54px;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     display: block;
@@ -3003,10 +3004,12 @@ FORCE_LIGHT_HEAD = """
         if (!pet || pet.dataset.bound === '1') return;
         pet.dataset.bound = '1';
 
-        const W = 44;
-        const H = 50;
+        const H = 54;
+        function getW() {
+            return pet.getBoundingClientRect().width || 44;
+        }
         let x = typeof startX === 'function' ? startX() : startX;
-        let y = Math.max(0, window.innerHeight - H - 6);
+        let y = Math.max(0, window.innerHeight - H - 8);
         let vx = startVx;
         let vy = 0;
         let dir = startDir;
@@ -3019,16 +3022,22 @@ FORCE_LIGHT_HEAD = """
         let tilt = 0;
         let audioCtx = null;
         let lastSoundTime = 0;
+        let preloadedAudio = null;
+        if (customAudioUri) {
+            preloadedAudio = new Audio(customAudioUri);
+            preloadedAudio.preload = 'auto';
+            preloadedAudio.volume = 0.85;
+            preloadedAudio.load();
+        }
 
         function playGumiImpactSound(intensity) {
             const nowMs = performance.now();
             if (nowMs - lastSoundTime < 450) return;
             lastSoundTime = nowMs;
-            if (customAudioUri) {
+            if (preloadedAudio) {
                 try {
-                    const a = new Audio(customAudioUri);
-                    a.volume = 0.85;
-                    a.play().catch(() => {});
+                    preloadedAudio.currentTime = 0;
+                    preloadedAudio.play().catch(() => {});
                     return;
                 } catch (err) {}
             }
@@ -3082,7 +3091,7 @@ FORCE_LIGHT_HEAD = """
         }
 
         function floorY() {
-            return Math.max(0, window.innerHeight - H - 6);
+            return Math.max(0, window.innerHeight - H - 8);
         }
 
         pet.addEventListener('pointerdown', (e) => {
@@ -3104,7 +3113,7 @@ FORCE_LIGHT_HEAD = """
             const dx = e.clientX - lastPointerX;
             const dy = e.clientY - lastPointerY;
             if (Math.abs(dx) > 2 || Math.abs(dy) > 2) movedDuringDrag = true;
-            x = Math.min(window.innerWidth - W, Math.max(0, e.clientX - dragOffsetX));
+            x = Math.min(window.innerWidth - getW(), Math.max(0, e.clientX - dragOffsetX));
             y = Math.min(floorY(), Math.max(0, e.clientY - dragOffsetY));
             vx = dx * 0.45;
             vy = dy * 0.45;
@@ -3169,9 +3178,9 @@ FORCE_LIGHT_HEAD = """
                     x = 0;
                     dir = 1;
                     vx = Math.abs(vx) || 1.15;
-                } else if (x >= window.innerWidth - W) {
+                } else if (x >= window.innerWidth - getW()) {
                     if (Math.abs(vx) > 2.8) playGumiImpactSound(Math.abs(vx));
-                    x = window.innerWidth - W;
+                    x = window.innerWidth - getW();
                     dir = -1;
                     vx = -(Math.abs(vx) || 1.15);
                 }

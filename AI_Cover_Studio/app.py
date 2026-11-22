@@ -214,9 +214,13 @@ def render_ipod_player_html(selected_label: str | None = None) -> str:
     tracks_json = html.escape(json.dumps(tracks, ensure_ascii=False))
     segs = "".join(f'<span class="ipod-seg" data-idx="{i}"></span>' for i in range(14))
     list_items = "".join(
-        f'<div class="ipod-menu-item" data-idx="{i}">{i + 1}. {html.escape(t["title"])}</div>'
+        f'<div class="ipod-menu-item">'
+        f'<span class="ipod-menu-title" data-idx="{i}" title="{html.escape(t["title"])}">{i + 1}. {html.escape(t["title"])}</span>'
+        f'<a class="ipod-menu-dl" href="{html.escape(t["url"])}" download="{html.escape(t["title"])}" title="Scarica MP3" aria-label="Scarica {html.escape(t["title"])}">'
+        f'<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M4 1h2v4h2L5 8.5 2 5h2V1zM1.5 9h7v1h-7V9z" fill="currentColor"/></svg>'
+        f'</a></div>'
         for i, t in enumerate(tracks)
-    ) or '<div class="ipod-menu-item">nessun mp3</div>'
+    ) or '<div class="ipod-menu-item"><span class="ipod-menu-title">nessun mp3</span></div>'
 
     return f"""
     <div class="kawaii-ipod-wrap">
@@ -256,7 +260,7 @@ def render_ipod_player_html(selected_label: str | None = None) -> str:
             <button type="button" class="ipod-btn ipod-play" title="Play / Pausa"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><polygon points="2,1 9,5 2,9" fill="currentColor"/></svg></button>
             <button type="button" class="ipod-btn ipod-next" title="Successiva">&gt;&gt;</button>
             <button type="button" class="ipod-btn ipod-vol-btn" title="Regola Volume">VOL</button>
-            <a class="ipod-btn ipod-dl" href="{html.escape(cur_url)}" download="{html.escape(cur_title)}" title="Scarica MP3">DL</a>
+            <button type="button" class="ipod-btn ipod-menu" title="Menu Tracce"><svg width="11" height="10" viewBox="0 0 11 10" aria-hidden="true"><rect x="1" y="1.5" width="9" height="1.5" fill="currentColor"/><rect x="1" y="4.25" width="9" height="1.5" fill="currentColor"/><rect x="1" y="7" width="9" height="1.5" fill="currentColor"/></svg></button>
           </div>
           <div class="ipod-vol-row" style="display:none;">
             <span style="font-size:9px;font-weight:bold;color:#9e4374;">AUDIO</span>
@@ -264,16 +268,6 @@ def render_ipod_player_html(selected_label: str | None = None) -> str:
             <span class="ipod-vol-pct" style="font-size:9px;color:#7a2652;">85%</span>
           </div>
           <audio class="ipod-audio" preload="metadata" src="{html.escape(cur_url)}"></audio>
-        </div>
-
-        <div class="ipod-wheel-area">
-          <div class="ipod-wheel">
-            <button type="button" class="wheel-zone wheel-top ipod-menu">MENU</button>
-            <button type="button" class="wheel-zone wheel-left ipod-prev">|&lt;</button>
-            <button type="button" class="wheel-zone wheel-right ipod-next">&gt;|</button>
-            <button type="button" class="wheel-zone wheel-bottom ipod-play">&gt;||</button>
-            <button type="button" class="wheel-center ipod-play" title="Play / Pausa"></button>
-          </div>
         </div>
       </div>
     </div>
@@ -2546,16 +2540,45 @@ button:active {{
 }}
 
 .ipod-menu-item {{
+    display: flex;
+    align-items: center;
+    gap: 4px;
     padding: 2px 4px;
-    cursor: pointer;
     color: #7a2652;
+}}
+
+.ipod-menu-item:hover {{
+    background: #ffd1e3;
+}}
+
+.ipod-menu-title {{
+    flex: 1;
+    min-width: 0;
+    cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }}
 
-.ipod-menu-item:hover {{
-    background: #ffd1e3;
+.ipod-menu-dl {{
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 16px;
+    border-radius: 3px;
+    border: 1px solid #d982a8;
+    background: #fff7fb;
+    color: #9e4374 !important;
+    text-decoration: none !important;
+    cursor: pointer;
+}}
+
+.ipod-menu-dl:hover {{
+    background: #ff6ea9;
+    color: #ffffff !important;
+    border-color: #9e4374;
 }}
 
 .ipod-vol-row {{
@@ -2783,63 +2806,6 @@ button:active {{
     right: -4px;
     bottom: -2px;
     pointer-events: none;
-}}
-
-.ipod-wheel-area {{
-    flex-shrink: 0;
-}}
-
-.ipod-wheel {{
-    position: relative;
-    width: 124px;
-    height: 124px;
-    border-radius: 50%;
-    background: #fffafd;
-    border: 2px solid #e07ba4;
-    box-shadow: inset 0 2px 5px rgba(224, 123, 164, 0.25), 2px 2px 0 rgba(242, 158, 192, 0.5);
-    box-sizing: border-box;
-}}
-
-.wheel-zone {{
-    position: absolute;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    border: none;
-    color: #9e4374;
-    font-family: "Courier New", monospace;
-    font-size: 10px;
-    font-weight: 900;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0;
-    margin: 0;
-    user-select: none;
-}}
-
-.wheel-zone:hover {{
-    color: #ff6ea9;
-}}
-
-.wheel-top    {{ top: 10px; left: 50%; transform: translateX(-50%); width: 52px; height: 20px; }}
-.wheel-bottom {{ bottom: 10px; left: 50%; transform: translateX(-50%); width: 44px; height: 20px; }}
-.wheel-left   {{ left: 8px; top: 50%; transform: translateY(-50%); width: 24px; height: 28px; }}
-.wheel-right  {{ right: 8px; top: 50%; transform: translateY(-50%); width: 24px; height: 28px; }}
-
-.wheel-center {{
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 44px;
-    height: 44px;
-    transform: translate(-50%, -50%);
-    border-radius: 50%;
-    background: linear-gradient(180deg, #ffe6f0 0%, #ff9ec6 100%);
-    border: 2px solid #e07ba4;
-    cursor: pointer;
-    box-shadow: inset 0 1px 2px #ffffff;
-    padding: 0;
 }}
 
 /* Roaming Pixel-Art Sprites */
@@ -3681,7 +3647,7 @@ FORCE_LIGHT_HEAD = """
                 menuBtn.addEventListener('click', () => {
                     menuList.style.display = menuList.style.display === 'none' ? 'block' : 'none';
                 });
-                menuList.querySelectorAll('.ipod-menu-item').forEach((item) => {
+                menuList.querySelectorAll('.ipod-menu-title[data-idx]').forEach((item) => {
                     item.addEventListener('click', () => {
                         const i = parseInt(item.dataset.idx || '0', 10);
                         loadIdx(i, true);

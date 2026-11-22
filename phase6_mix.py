@@ -16,10 +16,11 @@ from pedalboard import (
     Limiter,
 )
 
-project_root = r"C:\Users\seren\Desktop\Progetto_Pandetta_Miku"
+project_root = os.path.dirname(os.path.abspath(__file__))
 os.chdir(project_root)
 
-ffmpeg_dir = os.path.join(project_root, "venv", "Lib", "site-packages", "static_ffmpeg", "bin", "win32")
+_venv_dir = os.path.abspath(os.path.join(os.path.dirname(sys.executable), ".."))
+ffmpeg_dir = os.path.join(_venv_dir, "Lib", "site-packages", "static_ffmpeg", "bin", "win32")
 os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 ffmpeg_exe = os.path.join(ffmpeg_dir, "ffmpeg.exe")
 ffprobe_exe = os.path.join(ffmpeg_dir, "ffprobe.exe")

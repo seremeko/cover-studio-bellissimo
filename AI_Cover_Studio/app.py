@@ -50,9 +50,20 @@ PROJECT_ROOT = os.path.abspath(os.path.join(APP_DIR, ".."))
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 OUTPUT_DIR = os.path.join(APP_DIR, "output")
 RVC_DIR = os.path.join(PROJECT_ROOT, "rvc_cli")
-VENV_SCRIPTS = os.path.join(PROJECT_ROOT, "venv", "Scripts")
+
+_exe_venv = os.path.abspath(os.path.join(os.path.dirname(sys.executable), ".."))
+_local_venv = os.path.join(PROJECT_ROOT, "venv")
+_parent_venv = os.path.abspath(os.path.join(PROJECT_ROOT, "..", "venv"))
+if os.path.isdir(os.path.join(_exe_venv, "Scripts")):
+    VENV_DIR = _exe_venv
+elif os.path.isdir(_local_venv):
+    VENV_DIR = _local_venv
+else:
+    VENV_DIR = _parent_venv
+
+VENV_SCRIPTS = os.path.join(VENV_DIR, "Scripts")
 FFMPEG_DIR = os.path.join(
-    PROJECT_ROOT, "venv", "Lib", "site-packages", "static_ffmpeg", "bin", "win32"
+    VENV_DIR, "Lib", "site-packages", "static_ffmpeg", "bin", "win32"
 )
 
 os.makedirs(MODELS_DIR, exist_ok=True)

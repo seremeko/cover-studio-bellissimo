@@ -1670,7 +1670,7 @@ SIDEBAR_HTML = f"""
     <li>* rvc_cli + htdemucs</li>
     <li>* pyworld + pydub</li>
     <li>* pedalboard + ffmpeg</li>
-    <li>* hf + voice-models + github</li>
+    <li>* hf + voice-models</li>
 </ul>
 
 <div class="sidebar-heading">STATUS</div>

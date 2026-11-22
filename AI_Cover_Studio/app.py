@@ -2406,20 +2406,22 @@ footer {{
 }}
 
 /* Keep all 4 notebook tabs on a single horizontal line */
-.journal-main .tab-nav,
-.journal-main [role="tablist"] {{
+.gradio-container .journal-main .tab-nav,
+.gradio-container .journal-main [role="tablist"] {{
     display: flex !important;
     flex-wrap: nowrap !important;
     align-items: center !important;
-    gap: 4px !important;
+    gap: 2px !important;
     overflow: visible !important;
 }}
 
-.journal-main .tab-nav > button,
-.journal-main [role="tablist"] > button[role="tab"] {{
-    font-size: 12px !important;
-    padding: 6px 8px !important;
-    margin: 0 !important;
+.gradio-container .journal-main .tab-nav button,
+.gradio-container .journal-main [role="tablist"] button,
+.gradio-container .journal-main button[role="tab"] {{
+    font-size: 11.5px !important;
+    padding: 5px 7px !important;
+    margin: 0 2px 0 0 !important;
+    min-width: 0 !important;
     white-space: nowrap !important;
     flex-shrink: 0 !important;
     letter-spacing: 0 !important;
@@ -3733,8 +3735,14 @@ FORCE_LIGHT_HEAD = """
         });
     }
 
+    let tabsResized = false;
     function initAllPets() {
         initKawaiiIpod();
+        if (!tabsResized && document.querySelector('.journal-main .tab-nav, .journal-main [role="tablist"]')) {
+            tabsResized = true;
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 150);
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 600);
+        }
         initShimejiPet('gumi-pet', 60, 1.15, 1, 520, null);
         initShimejiPet('miku-pet', () => Math.max(120, window.innerWidth - 110), -1.05, -1, 640, null);
         initShimejiPet('rena-pet', () => Math.max(80, Math.floor(window.innerWidth * 0.45)), 0.95, 1, 580, null);

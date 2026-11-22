@@ -2405,6 +2405,26 @@ footer {{
     border-radius: 0px !important;
 }}
 
+/* Keep all 4 notebook tabs on a single horizontal line */
+.journal-main .tab-nav,
+.journal-main [role="tablist"] {{
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    gap: 4px !important;
+    overflow: visible !important;
+}}
+
+.journal-main .tab-nav > button,
+.journal-main [role="tablist"] > button[role="tab"] {{
+    font-size: 12px !important;
+    padding: 6px 8px !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+    letter-spacing: 0 !important;
+}}
+
 /* Soft Pastel Buttons */
 button.primary, button.lg {{
     background: linear-gradient(180deg, #ffe6f0 0%, #f79ec1 100%) !important;

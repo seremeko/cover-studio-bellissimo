@@ -929,6 +929,7 @@ def install_from_direct_url(direct_url: str, custom_name: str, progress=gr.Progr
 # ---------------------------------------------------------------------------
 def generate_cover(
     song_input: str,
+    local_file_path: str | None,
     mode: str,
     voice1_label: str,
     pitch1_mode: str,
@@ -946,9 +947,10 @@ def generate_cover(
         logs.append(msg)
         return "\n".join(logs)
 
+    has_local_file = bool(local_file_path and os.path.exists(local_file_path))
     song_query = (song_input or "").strip()
-    if not song_query:
-        yield log("[ERRORE] Inserisci il titolo di una canzone o un URL YouTube."), None
+    if not has_local_file and not song_query:
+        yield log("[ERRORE] Inserisci il titolo di una canzone, un URL YouTube oppure carica un file MP3/MP4 locale."), None
         return
 
     if not voice1_label or voice1_label not in MODEL_REGISTRY:
@@ -961,49 +963,75 @@ def generate_cover(
         return
 
     # -----------------------------------------------------------------------
-    # STEP 1: Download audio via yt-dlp into output/<nome_canzone>
+    # STEP 1: Acquire audio (Local MP3/MP4 via ffmpeg OR YouTube via yt-dlp)
     # -----------------------------------------------------------------------
-    progress(0.05, desc="Step 1/5: Download audio con yt-dlp...")
-    is_url = song_query.startswith(("http://", "https://")) or "youtube.com" in song_query or "youtu.be" in song_query
-    yt_target = song_query if is_url else f"ytsearch1:{song_query}"
+    if has_local_file:
+        progress(0.05, desc="Step 1/5: Conversione file locale in WAV...")
+        raw_title = Path(local_file_path).stem
+        song_folder_name = sanitize_name(raw_title, default="local_song")
+        work_dir = os.path.join(OUTPUT_DIR, song_folder_name)
+        os.makedirs(work_dir, exist_ok=True)
+        original_wav = os.path.join(work_dir, "original.wav")
 
-    yield log(f"[STEP 1/5] Risoluzione titolo per: {yt_target}"), None
-    try:
-        title_proc = subprocess.run(
-            [YT_DLP_EXE, "--get-title", "--no-playlist", yt_target],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        raw_title = title_proc.stdout.strip().splitlines()[0] if title_proc.stdout.strip() else song_query
-    except Exception:
-        raw_title = song_query if not is_url else "youtube_song"
-
-    song_folder_name = sanitize_name(raw_title, default="song")
-    work_dir = os.path.join(OUTPUT_DIR, song_folder_name)
-    os.makedirs(work_dir, exist_ok=True)
-    original_wav = os.path.join(work_dir, "original.wav")
-
-    yield log(f"[STEP 1/5] Cartella di lavoro: {work_dir}"), None
-    if os.path.exists(original_wav) and os.path.getsize(original_wav) > 10240:
-        yield log(f"[STEP 1/5] Cache trovata: uso original.wav già presente ({os.path.getsize(original_wav)/(1024*1024):.2f} MB)"), None
-    else:
-        if os.path.exists(original_wav):
-            os.remove(original_wav)
-        dl_cmd = [
-            YT_DLP_EXE,
-            "--ffmpeg-location", FFMPEG_DIR if os.path.isdir(FFMPEG_DIR) else os.path.dirname(FFMPEG_EXE),
-            "--no-playlist",
-            "-x",
-            "--audio-format", "wav",
-            "-o", os.path.join(work_dir, "original.%(ext)s"),
-            yt_target,
-        ]
-        subprocess.run(dl_cmd, check=True)
-        if not os.path.exists(original_wav):
-            yield log("[ERRORE] Download WAV fallito: original.wav non trovato."), None
+        yield log(f"[STEP 1/5] File locale rilevato: {os.path.basename(local_file_path)}"), None
+        yield log(f"[STEP 1/5] Cartella di lavoro: {work_dir}"), None
+        try:
+            (
+                ffmpeg
+                .input(local_file_path)
+                .output(original_wav, acodec="pcm_s16le", ar=44100, ac=2)
+                .overwrite_output()
+                .run(cmd=FFMPEG_EXE, quiet=True)
+            )
+        except Exception as e:
+            yield log(f"[ERRORE] Conversione file locale fallita: {e}"), None
             return
-        yield log(f"[STEP 1/5] Download completato: original.wav ({os.path.getsize(original_wav)/(1024*1024):.2f} MB)"), None
+        if not os.path.exists(original_wav):
+            yield log("[ERRORE] original.wav non generato dal file locale."), None
+            return
+        yield log(f"[STEP 1/5] Conversione WAV completata: original.wav ({os.path.getsize(original_wav)/(1024*1024):.2f} MB)"), None
+    else:
+        progress(0.05, desc="Step 1/5: Download audio con yt-dlp...")
+        is_url = song_query.startswith(("http://", "https://")) or "youtube.com" in song_query or "youtu.be" in song_query
+        yt_target = song_query if is_url else f"ytsearch1:{song_query}"
+
+        yield log(f"[STEP 1/5] Risoluzione titolo per: {yt_target}"), None
+        try:
+            title_proc = subprocess.run(
+                [YT_DLP_EXE, "--get-title", "--no-playlist", yt_target],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            raw_title = title_proc.stdout.strip().splitlines()[0] if title_proc.stdout.strip() else song_query
+        except Exception:
+            raw_title = song_query if not is_url else "youtube_song"
+
+        song_folder_name = sanitize_name(raw_title, default="song")
+        work_dir = os.path.join(OUTPUT_DIR, song_folder_name)
+        os.makedirs(work_dir, exist_ok=True)
+        original_wav = os.path.join(work_dir, "original.wav")
+
+        yield log(f"[STEP 1/5] Cartella di lavoro: {work_dir}"), None
+        if os.path.exists(original_wav) and os.path.getsize(original_wav) > 10240:
+            yield log(f"[STEP 1/5] Cache trovata: uso original.wav già presente ({os.path.getsize(original_wav)/(1024*1024):.2f} MB)"), None
+        else:
+            if os.path.exists(original_wav):
+                os.remove(original_wav)
+            dl_cmd = [
+                YT_DLP_EXE,
+                "--ffmpeg-location", FFMPEG_DIR if os.path.isdir(FFMPEG_DIR) else os.path.dirname(FFMPEG_EXE),
+                "--no-playlist",
+                "-x",
+                "--audio-format", "wav",
+                "-o", os.path.join(work_dir, "original.%(ext)s"),
+                yt_target,
+            ]
+            subprocess.run(dl_cmd, check=True)
+            if not os.path.exists(original_wav):
+                yield log("[ERRORE] Download WAV fallito: original.wav non trovato."), None
+                return
+            yield log(f"[STEP 1/5] Download completato: original.wav ({os.path.getsize(original_wav)/(1024*1024):.2f} MB)"), None
 
     # -----------------------------------------------------------------------
     # STEP 2: Demucs separation (htdemucs, --two-stems=vocals)
@@ -1684,6 +1712,11 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                         label="Titolo canzone o URL YouTube",
                         placeholder="Es: Niko Pandetta - Pistole nella Fendi  oppure  https://www.youtube.com/watch?v=...",
                     )
+                    local_file_input = gr.File(
+                        label="Oppure carica un file locale dal PC (MP3 / MP4 / WAV)",
+                        file_types=[".mp3", ".mp4", ".wav", ".m4a", ".flac", ".ogg"],
+                        type="filepath",
+                    )
 
                     mode_radio = gr.Radio(
                         choices=["Voce Singola", "Duetto (Split Maschile / Femminile via F0)"],
@@ -1908,6 +1941,7 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
         fn=generate_cover,
         inputs=[
             song_input,
+            local_file_input,
             mode_radio,
             voice1_dd,
             pitch1_mode,

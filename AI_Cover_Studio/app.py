@@ -2062,6 +2062,7 @@ RENA_SPRITE_URI = _load_data_uri("sprite_rena.png", "image/png")
 RIKA_SPRITE_URI = _load_data_uri("sprite_rika.png", "image/png")
 YORU_SPRITE_URI = _load_data_uri("sprite_yoru.png", "image/png")
 ASA_SPRITE_URI = _load_data_uri("sprite_asa.png", "image/png")
+TETO_SPRITE_URI = _load_data_uri("sprite_teto.png", "image/png")
 RIKA_NIPAH_URI = _load_data_uri("rika_nipah.mp3", "audio/mpeg")
 
 CUSTOM_CSS = f"""
@@ -2521,6 +2522,9 @@ CHIBI_STAGE_HTML = f"""
     </div>
     <div id="asa-pet" class="vocaloid-walker" title="Asa">
         <img class="chibi-pixel-sprite" src="{ASA_SPRITE_URI}" alt="Asa" draggable="false" />
+    </div>
+    <div id="teto-pet" class="vocaloid-walker" title="Kasane Teto">
+        <img class="chibi-pixel-sprite" src="{TETO_SPRITE_URI}" alt="Teto" draggable="false" />
     </div>
 </div>
 """
@@ -3210,6 +3214,7 @@ FORCE_LIGHT_HEAD = """
         initShimejiPet('rika-pet', () => Math.max(100, Math.floor(window.innerWidth * 0.65)), -0.90, -1, 680, window.__RIKA_NIPAH_URI || null);
         initShimejiPet('yoru-pet', () => Math.max(40, Math.floor(window.innerWidth * 0.25)), 1.05, 1, 460, null);
         initShimejiPet('asa-pet', () => Math.max(140, Math.floor(window.innerWidth * 0.80)), -0.85, -1, 500, null);
+        initShimejiPet('teto-pet', () => Math.max(90, Math.floor(window.innerWidth * 0.15)), 1.0, 1, 610, null);
     }
 
     const observer = new MutationObserver(initAllPets);

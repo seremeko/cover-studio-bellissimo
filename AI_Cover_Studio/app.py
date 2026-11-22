@@ -2219,9 +2219,7 @@ footer {{
 
 /* Top Journal Header Card */
 .journal-header-block,
-.journal-header-block > div,
-.ipod-html-block,
-.ipod-html-block > div {{
+.ipod-html-block {{
     padding: 0 !important;
     margin: 0 !important;
     border: none !important;
@@ -2232,11 +2230,11 @@ footer {{
 .journal-header {{
     width: 100%;
     box-sizing: border-box;
-    background: #fffdfd;
-    border: 2px solid #f29ec0;
-    box-shadow: 4px 4px 0px rgba(242, 158, 192, 0.55);
-    padding: 16px 22px;
-    margin-bottom: 14px;
+    background: #fffdfd !important;
+    border: 2px solid #f29ec0 !important;
+    box-shadow: 4px 4px 0px rgba(242, 158, 192, 0.55) !important;
+    padding: 16px 22px !important;
+    margin: 0 0 14px 0 !important;
     display: flex;
     justify-content: space-between;
     align-items: center;

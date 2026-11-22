@@ -253,7 +253,7 @@ def render_ipod_player_html(selected_label: str | None = None) -> str:
 
           <div class="ipod-mini-btns">
             <button type="button" class="ipod-btn ipod-prev" title="Precedente">&lt;&lt;</button>
-            <button type="button" class="ipod-btn ipod-play" title="Play / Pausa">PLAY</button>
+            <button type="button" class="ipod-btn ipod-play" title="Play / Pausa"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><polygon points="2,1 9,5 2,9" fill="currentColor"/></svg></button>
             <button type="button" class="ipod-btn ipod-next" title="Successiva">&gt;&gt;</button>
             <button type="button" class="ipod-btn ipod-vol-btn" title="Regola Volume">VOL</button>
             <a class="ipod-btn ipod-dl" href="{html.escape(cur_url)}" download="{html.escape(cur_title)}" title="Scarica MP3">DL</a>
@@ -3702,15 +3702,17 @@ FORCE_LIGHT_HEAD = """
                 });
             }
 
+            const PLAY_SVG = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><polygon points="2,1 9,5 2,9" fill="currentColor"/></svg>';
+            const PAUSE_SVG = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="2" y="1" width="2.5" height="8" fill="currentColor"/><rect x="5.5" y="1" width="2.5" height="8" fill="currentColor"/></svg>';
             audio.addEventListener('play', () => {
                 ipod.classList.add('playing');
                 const btn = ipod.querySelector('.ipod-mini-btns .ipod-play');
-                if (btn) btn.textContent = 'PAUSE';
+                if (btn) btn.innerHTML = PAUSE_SVG;
             });
             audio.addEventListener('pause', () => {
                 ipod.classList.remove('playing');
                 const btn = ipod.querySelector('.ipod-mini-btns .ipod-play');
-                if (btn) btn.textContent = 'PLAY';
+                if (btn) btn.innerHTML = PLAY_SVG;
             });
             audio.addEventListener('ended', () => loadIdx(idx + 1, true));
             audio.addEventListener('timeupdate', () => {

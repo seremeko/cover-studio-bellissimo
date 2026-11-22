@@ -182,6 +182,78 @@ def scan_archive_files() -> tuple[dict[str, str], list[str]]:
     return registry, labels
 
 
+def _archive_file_url(full_path: str) -> str:
+    return "/gradio_api/file=" + urllib.parse.quote(full_path.replace("\\", "/"), safe="/:")
+
+
+def render_ipod_player_html(selected_label: str | None = None) -> str:
+    tracks = []
+    start_idx = 0
+    for idx, lbl in enumerate(ARCHIVE_REGISTRY.keys()):
+        fpath = ARCHIVE_REGISTRY[lbl]
+        short_name = os.path.basename(fpath)
+        tracks.append({"title": short_name, "label": lbl, "url": _archive_file_url(fpath)})
+        if lbl == selected_label:
+            start_idx = idx
+
+    cur_title = tracks[start_idx]["title"] if tracks else "nessuna traccia"
+    cur_url = tracks[start_idx]["url"] if tracks else ""
+    tracks_json = html.escape(json.dumps(tracks, ensure_ascii=False))
+    segs = "".join(f'<span class="ipod-seg" data-idx="{i}"></span>' for i in range(18))
+
+    return f"""
+    <div class="kawaii-ipod-wrap">
+      <div class="kawaii-ipod" data-tracks="{tracks_json}" data-idx="{start_idx}">
+        <div class="ipod-charm" aria-hidden="true">
+          <div class="ipod-charm-chain"></div>
+          <svg width="24" height="22" viewBox="0 0 16 14" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 1h3v1h2V1h3v1h2v3h-1v2h-1v2h-2v2H9v2H7v-2H5V9H3V7H2V5H1V2h3V1z" fill="#ff85b3" stroke="#9e4374" stroke-width="1"/>
+            <rect x="4" y="3" width="2" height="2" fill="#fffafd"/>
+          </svg>
+        </div>
+
+        <div class="ipod-screen">
+          <div class="ipod-statusbar">
+            <svg width="16" height="10" viewBox="0 0 16 10"><rect x="1" y="7" width="2" height="3" fill="#9e4374"/><rect x="5" y="5" width="2" height="5" fill="#9e4374"/><rect x="9" y="3" width="2" height="7" fill="#9e4374"/><rect x="13" y="1" width="2" height="9" fill="#9e4374"/></svg>
+            <svg width="12" height="10" viewBox="0 0 12 10"><path d="M3 1h2v1h2V1h2v1h2v3H9v2H7v2H5V7H3V5H1V2h2V1z" fill="#ff6ea9" stroke="#9e4374" stroke-width="0.8"/></svg>
+            <svg width="18" height="10" viewBox="0 0 18 10"><rect x="1" y="1" width="14" height="8" fill="#fffafd" stroke="#9e4374" stroke-width="1.2"/><rect x="15" y="3" width="2" height="4" fill="#9e4374"/><rect x="3" y="3" width="8" height="4" fill="#ff85b3"/></svg>
+          </div>
+
+          <div class="ipod-screen-body">
+            <div class="ipod-info">
+              <div class="ipod-now-hdr">NOW PLAYING</div>
+              <div class="ipod-track-title">{html.escape(cur_title)}</div>
+              <div class="ipod-time">0:00 / 0:00</div>
+              <div class="ipod-progress" title="Clicca per cercare">{segs}</div>
+              <div class="ipod-mini-btns">
+                <button type="button" class="ipod-btn ipod-prev" title="Precedente">&lt;&lt;</button>
+                <button type="button" class="ipod-btn ipod-play" title="Play / Pausa">PLAY</button>
+                <button type="button" class="ipod-btn ipod-next" title="Successiva">&gt;&gt;</button>
+                <span class="ipod-pl-tag">ARCHIVE</span>
+              </div>
+            </div>
+            <div class="ipod-cd-wrap">
+              <div class="ipod-cd"></div>
+              <svg class="ipod-sparkle" width="14" height="14" viewBox="0 0 14 14"><path d="M7 0L8.5 5.5L14 7L8.5 8.5L7 14L5.5 8.5L0 7L5.5 5.5Z" fill="#fffafd" stroke="#e07ba4" stroke-width="0.8"/></svg>
+            </div>
+          </div>
+          <audio class="ipod-audio" preload="metadata" src="{html.escape(cur_url)}"></audio>
+        </div>
+
+        <div class="ipod-wheel-area">
+          <div class="ipod-wheel">
+            <button type="button" class="wheel-zone wheel-top ipod-menu">MENU</button>
+            <button type="button" class="wheel-zone wheel-left ipod-prev">|&lt;</button>
+            <button type="button" class="wheel-zone wheel-right ipod-next">&gt;|</button>
+            <button type="button" class="wheel-zone wheel-bottom ipod-play">&gt;||</button>
+            <button type="button" class="wheel-center ipod-play" title="Play / Pausa"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+
+
 def refresh_archive_ui():
     global ARCHIVE_REGISTRY
     ARCHIVE_REGISTRY, labels = scan_archive_files()
@@ -191,14 +263,15 @@ def refresh_archive_ui():
         gr.update(choices=labels, value=first_val),
         first_path,
         first_path,
+        render_ipod_player_html(first_val),
     )
 
 
 def select_archive_file(label: str):
     path = ARCHIVE_REGISTRY.get(label) if label else None
     if path and os.path.exists(path):
-        return path, path
-    return None, None
+        return path, path, render_ipod_player_html(label)
+    return None, None, render_ipod_player_html(None)
 
 
 def estimate_median_f0(wav_path: str) -> float:
@@ -2396,6 +2469,243 @@ button:active {{
     word-break: break-word;
 }}
 
+@keyframes ipod-spin {{
+    0%   {{ transform: rotate(0deg); }}
+    100% {{ transform: rotate(360deg); }}
+}}
+
+.kawaii-ipod-wrap {{
+    display: flex;
+    justify-content: center;
+    margin: 8px 0 12px 0;
+}}
+
+.kawaii-ipod {{
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    max-width: 560px;
+    padding: 12px 16px;
+    background: linear-gradient(180deg, #fffafd 0%, #ffe0ee 52%, #ffc8e1 100%);
+    border: 2.5px solid #e07ba4;
+    border-radius: 22px;
+    box-shadow: 4px 4px 0px rgba(242, 158, 192, 0.7), inset 0 2px 0 #ffffff;
+    font-family: "Courier New", Consolas, monospace;
+}}
+
+.ipod-charm {{
+    position: absolute;
+    left: -14px;
+    top: 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+}}
+
+.ipod-charm-chain {{
+    width: 4px;
+    height: 18px;
+    border-left: 3px dotted #e07ba4;
+}}
+
+.ipod-screen {{
+    flex: 1.55;
+    background: linear-gradient(180deg, #fff7fb 0%, #ffeaf4 100%);
+    border: 2px solid #9e4374;
+    border-radius: 10px;
+    padding: 7px 9px;
+    box-shadow: inset 0 2px 4px rgba(158, 67, 116, 0.14);
+    min-width: 0;
+}}
+
+.ipod-statusbar {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px dashed #f29ec0;
+    padding-bottom: 3px;
+    margin-bottom: 5px;
+}}
+
+.ipod-screen-body {{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}}
+
+.ipod-info {{
+    flex: 1;
+    min-width: 0;
+}}
+
+.ipod-now-hdr {{
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    color: #9e4374;
+}}
+
+.ipod-track-title {{
+    font-size: 12px;
+    font-weight: bold;
+    color: #5c193d;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin: 2px 0;
+}}
+
+.ipod-time {{
+    font-size: 10px;
+    color: #8f5c7a;
+    margin-bottom: 4px;
+}}
+
+.ipod-progress {{
+    display: flex;
+    gap: 2px;
+    margin-bottom: 6px;
+    cursor: pointer;
+}}
+
+.ipod-seg {{
+    flex: 1;
+    height: 8px;
+    background: #fffafd;
+    border: 1px solid #d982a8;
+}}
+
+.ipod-seg.filled {{
+    background: #ff6ea9;
+}}
+
+.ipod-mini-btns {{
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}}
+
+.ipod-btn {{
+    background: linear-gradient(180deg, #fffafd 0%, #ffd1e3 100%);
+    border: 1.5px solid #9e4374;
+    border-radius: 4px;
+    color: #7a2652;
+    font-family: "Courier New", monospace;
+    font-size: 10px;
+    font-weight: 900;
+    padding: 2px 6px;
+    cursor: pointer;
+    box-shadow: 1px 1px 0 #e07ba4;
+}}
+
+.ipod-btn:active {{
+    transform: translate(1px, 1px);
+}}
+
+.ipod-pl-tag {{
+    margin-left: auto;
+    font-size: 9px;
+    font-weight: bold;
+    color: #9e4374;
+    background: #fffafd;
+    border: 1px solid #f29ec0;
+    padding: 1px 5px;
+    border-radius: 4px;
+}}
+
+.ipod-cd-wrap {{
+    position: relative;
+    width: 64px;
+    height: 64px;
+    flex-shrink: 0;
+}}
+
+.ipod-cd {{
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: 2px solid #9e4374;
+    background: conic-gradient(
+        #ffd1e3, #b2f5ea, #fff3b0, #e6ddff, #ffb8d4, #b2f5ea, #ffd1e3
+    );
+    position: relative;
+    box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.85);
+    animation: ipod-spin 3.2s linear infinite;
+    animation-play-state: paused;
+}}
+
+.kawaii-ipod.playing .ipod-cd {{
+    animation-play-state: running;
+}}
+
+.ipod-cd::after {{
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: #fff4f8;
+    border: 2px solid #9e4374;
+}}
+
+.ipod-sparkle {{
+    position: absolute;
+    right: -4px;
+    bottom: -2px;
+    pointer-events: none;
+}}
+
+.ipod-wheel-area {{
+    flex-shrink: 0;
+}}
+
+.ipod-wheel {{
+    position: relative;
+    width: 112px;
+    height: 112px;
+    border-radius: 50%;
+    background: #fffafd;
+    border: 2px solid #e07ba4;
+    box-shadow: inset 0 2px 5px rgba(224, 123, 164, 0.25), 2px 2px 0 rgba(242, 158, 192, 0.5);
+}}
+
+.wheel-zone {{
+    position: absolute;
+    background: transparent;
+    border: none;
+    color: #9e4374;
+    font-family: "Courier New", monospace;
+    font-size: 10px;
+    font-weight: 900;
+    cursor: pointer;
+    padding: 4px;
+}}
+
+.wheel-top    {{ top: 6px; left: 50%; transform: translateX(-50%); }}
+.wheel-bottom {{ bottom: 6px; left: 50%; transform: translateX(-50%); }}
+.wheel-left   {{ left: 6px; top: 50%; transform: translateY(-50%); }}
+.wheel-right  {{ right: 6px; top: 50%; transform: translateY(-50%); }}
+
+.wheel-center {{
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 40px;
+    height: 40px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: linear-gradient(180deg, #ffe6f0 0%, #ff9ec6 100%);
+    border: 2px solid #e07ba4;
+    cursor: pointer;
+    box-shadow: inset 0 1px 2px #ffffff;
+}}
+
 /* Roaming Pixel-Art Sprites */
 .chibi-stage {{
     position: fixed;
@@ -2838,6 +3148,7 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                         ARCHIVE_REGISTRY, ARCHIVE_LABELS = scan_archive_files()
                         DEFAULT_ARCH = ARCHIVE_LABELS[0] if ARCHIVE_LABELS else None
                         DEFAULT_ARCH_PATH = ARCHIVE_REGISTRY.get(DEFAULT_ARCH) if DEFAULT_ARCH else None
+                        ipod_player_html = gr.HTML(render_ipod_player_html(DEFAULT_ARCH))
                         with gr.Row():
                             archive_dd = gr.Dropdown(
                                 choices=ARCHIVE_LABELS,
@@ -2964,19 +3275,19 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
     archive_refresh_btn.click(
         fn=refresh_archive_ui,
         inputs=[],
-        outputs=[archive_dd, archive_audio, archive_file],
+        outputs=[archive_dd, archive_audio, archive_file, ipod_player_html],
     )
 
     archive_dd.change(
         fn=select_archive_file,
         inputs=[archive_dd],
-        outputs=[archive_audio, archive_file],
+        outputs=[archive_audio, archive_file, ipod_player_html],
     )
 
     archive_tab.select(
         fn=refresh_archive_ui,
         inputs=[],
-        outputs=[archive_dd, archive_audio, archive_file],
+        outputs=[archive_dd, archive_audio, archive_file, ipod_player_html],
     )
 
     generate_btn.click(
@@ -3207,7 +3518,92 @@ FORCE_LIGHT_HEAD = """
         requestAnimationFrame(tick);
     }
 
+    function initKawaiiIpod() {
+        document.querySelectorAll('.kawaii-ipod').forEach((ipod) => {
+            if (ipod.dataset.bound === '1') return;
+            ipod.dataset.bound = '1';
+            const audio = ipod.querySelector('.ipod-audio');
+            const titleEl = ipod.querySelector('.ipod-track-title');
+            const timeEl = ipod.querySelector('.ipod-time');
+            const playBtns = ipod.querySelectorAll('.ipod-play');
+            const prevBtns = ipod.querySelectorAll('.ipod-prev');
+            const nextBtns = ipod.querySelectorAll('.ipod-next');
+            const menuBtn = ipod.querySelector('.ipod-menu');
+            const segs = Array.from(ipod.querySelectorAll('.ipod-seg'));
+            const progBar = ipod.querySelector('.ipod-progress');
+
+            let tracks = [];
+            try { tracks = JSON.parse(ipod.dataset.tracks || '[]'); } catch (e) {}
+            let idx = parseInt(ipod.dataset.idx || '0', 10) || 0;
+
+            function fmt(s) {
+                if (!isFinite(s)) return '0:00';
+                const m = Math.floor(s / 60);
+                const sec = Math.floor(s % 60);
+                return m + ':' + String(sec).padStart(2, '0');
+            }
+
+            function loadIdx(newIdx, autoPlay) {
+                if (!tracks.length) return;
+                idx = (newIdx + tracks.length) % tracks.length;
+                const tr = tracks[idx];
+                titleEl.textContent = tr.title;
+                audio.src = tr.url;
+                if (autoPlay) {
+                    audio.play().catch(() => {});
+                }
+            }
+
+            function togglePlay() {
+                if (!audio.src) return;
+                if (audio.paused) {
+                    audio.play().catch(() => {});
+                } else {
+                    audio.pause();
+                }
+            }
+
+            playBtns.forEach((b) => b.addEventListener('click', togglePlay));
+            prevBtns.forEach((b) => b.addEventListener('click', () => loadIdx(idx - 1, true)));
+            nextBtns.forEach((b) => b.addEventListener('click', () => loadIdx(idx + 1, true)));
+            if (menuBtn) {
+                menuBtn.addEventListener('click', () => loadIdx(0, true));
+            }
+
+            audio.addEventListener('play', () => {
+                ipod.classList.add('playing');
+                const btn = ipod.querySelector('.ipod-mini-btns .ipod-play');
+                if (btn) btn.textContent = 'PAUSE';
+            });
+            audio.addEventListener('pause', () => {
+                ipod.classList.remove('playing');
+                const btn = ipod.querySelector('.ipod-mini-btns .ipod-play');
+                if (btn) btn.textContent = 'PLAY';
+            });
+            audio.addEventListener('ended', () => loadIdx(idx + 1, true));
+            audio.addEventListener('timeupdate', () => {
+                const dur = audio.duration || 0;
+                const cur = audio.currentTime || 0;
+                timeEl.textContent = fmt(cur) + ' / ' + fmt(dur);
+                const ratio = dur > 0 ? cur / dur : 0;
+                const lit = Math.round(ratio * segs.length);
+                segs.forEach((sg, i) => sg.classList.toggle('filled', i < lit));
+            });
+
+            if (progBar) {
+                progBar.addEventListener('click', (e) => {
+                    const dur = audio.duration || 0;
+                    if (dur <= 0) return;
+                    const rect = progBar.getBoundingClientRect();
+                    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                    audio.currentTime = ratio * dur;
+                });
+            }
+        });
+    }
+
     function initAllPets() {
+        initKawaiiIpod();
         initShimejiPet('gumi-pet', 60, 1.15, 1, 520, null);
         initShimejiPet('miku-pet', () => Math.max(120, window.innerWidth - 110), -1.05, -1, 640, null);
         initShimejiPet('rena-pet', () => Math.max(80, Math.floor(window.innerWidth * 0.45)), 0.95, 1, 580, null);
@@ -3226,4 +3622,9 @@ FORCE_LIGHT_HEAD = """
 
 if __name__ == "__main__":
     head_html = f'<script>window.__RIKA_NIPAH_URI = "{RIKA_NIPAH_URI}";</script>' + FORCE_LIGHT_HEAD
-    demo.queue().launch(inbrowser=True, css=CUSTOM_CSS, head=head_html)
+    demo.queue().launch(
+        inbrowser=True,
+        css=CUSTOM_CSS,
+        head=head_html,
+        allowed_paths=[PROJECT_ROOT, OUTPUT_DIR],
+    )

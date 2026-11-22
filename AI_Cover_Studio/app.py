@@ -3,6 +3,7 @@ import re
 import sys
 import html
 import json
+import asyncio
 import random
 import base64
 import shutil
@@ -1111,6 +1112,135 @@ def train_rvc_voice(
 
 
 # ---------------------------------------------------------------------------
+# Text-to-Speech (Edge-TTS + RVC v2)
+# ---------------------------------------------------------------------------
+def load_tts_voices() -> list[str]:
+    priority = [
+        "it-IT-ElsaNeural",
+        "it-IT-IsabellaNeural",
+        "it-IT-DiegoNeural",
+        "it-IT-GiuseppeMultilingualNeural",
+        "en-US-AvaMultilingualNeural",
+        "en-US-AndrewMultilingualNeural",
+        "ja-JP-NanamiNeural",
+        "ja-JP-KeitaNeural",
+    ]
+    all_voices = list(priority)
+    json_path = os.path.join(RVC_DIR, "rvc", "lib", "tools", "tts_voices.json")
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for item in data:
+                sn = item.get("ShortName")
+                if sn and sn not in all_voices:
+                    all_voices.append(sn)
+        except Exception:
+            pass
+    return all_voices
+
+
+TTS_VOICES_LIST = load_tts_voices()
+
+
+def generate_tts_rvc(
+    text: str,
+    rvc_voice_label: str,
+    base_tts_voice: str,
+    pitch_mode: str,
+    pitch_manual: float,
+    tts_rate: int,
+    index_rate: float,
+    progress=gr.Progress(),
+):
+    logs = []
+
+    def log(msg: str):
+        logs.append(msg)
+        return "\n".join(logs)
+
+    clean_text = (text or "").strip()
+    if not clean_text:
+        yield log("[ERRORE] Inserisci un testo da far pronunciare."), None
+        return
+
+    if not rvc_voice_label or rvc_voice_label not in MODEL_REGISTRY:
+        yield log("[ERRORE] Seleziona una voce RVC valida."), None
+        return
+
+    import edge_tts
+
+    tts_dir = os.path.join(OUTPUT_DIR, "tts")
+    os.makedirs(tts_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_voice = sanitize_name(rvc_voice_label.split("/")[-1], default="voice")
+
+    raw_mp3 = os.path.join(tts_dir, f"_tmp_tts_{ts}.mp3")
+    base_wav = os.path.join(tts_dir, f"_tmp_tts_{ts}.wav")
+    rvc_wav = os.path.join(tts_dir, f"_tmp_rvc_{ts}.wav")
+    final_mp3 = os.path.join(tts_dir, f"tts_{safe_voice}_{ts}.mp3")
+
+    progress(0.15, desc="Sintesi voce base (Edge-TTS)...")
+    yield log(f"[TTS 1/3] Sintesi testo con {base_tts_voice} (velocità={int(tts_rate):+d}%)..."), None
+
+    try:
+        rate_str = f"{int(tts_rate):+d}%"
+        async def _run_edge():
+            comm = edge_tts.Communicate(clean_text, base_tts_voice, rate=rate_str)
+            await comm.save(raw_mp3)
+
+        asyncio.run(_run_edge())
+        (
+            ffmpeg
+            .input(raw_mp3)
+            .output(base_wav, acodec="pcm_s16le", ar=44100, ac=1)
+            .overwrite_output()
+            .run(cmd=FFMPEG_EXE, quiet=True)
+        )
+    except Exception as e:
+        yield log(f"[ERRORE TTS] {e}"), None
+        return
+
+    progress(0.50, desc="Conversione RVC v2 (rmvpe)...")
+    v_info = MODEL_REGISTRY[rvc_voice_label]
+    pitch, p_desc = resolve_pitch(pitch_mode, pitch_manual, base_wav, rvc_voice_label)
+    yield log(f"[TTS 2/3] Inferenza RVC ({rvc_voice_label}) | Pitch: {p_desc} | Index Rate: {index_rate}"), None
+
+    try:
+        msg, _ = run_rvc_inference(
+            input_wav=base_wav,
+            output_wav=rvc_wav,
+            pth_path=v_info["pth"],
+            index_path=v_info["index"],
+            pitch=pitch,
+            index_rate=index_rate,
+        )
+        yield log(f"[TTS 2/3] {msg}"), None
+
+        progress(0.88, desc="Export MP3 320 kbps...")
+        (
+            ffmpeg
+            .input(rvc_wav)
+            .output(final_mp3, audio_bitrate="320k", acodec="libmp3lame", ar=44100)
+            .overwrite_output()
+            .run(cmd=FFMPEG_EXE, quiet=True)
+        )
+    except Exception as e:
+        yield log(f"[ERRORE RVC] {e}"), None
+        return
+    finally:
+        for p in (raw_mp3, base_wav, rvc_wav):
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+    progress(1.0, desc="Parlato RVC pronto!")
+    yield log(f"[COMPLETATO] Audio salvato: {final_mp3}"), final_mp3
+
+
+# ---------------------------------------------------------------------------
 # Main Cover Generation Pipeline
 # ---------------------------------------------------------------------------
 def generate_cover(
@@ -2090,7 +2220,70 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                             elem_classes=["journal-log"],
                         )
 
-                # TAB 4: Archivio Cover Generate
+                # TAB 4: Text to Speech (TTS + RVC)
+                with gr.Tab("Text to Speech") as tts_tab:
+                    with gr.Column(elem_classes=["journal-subbox"]):
+                        gr.HTML(
+                            '<p style="font-size:12px;margin:0 0 8px 0;">Scrivi un testo e fallo pronunciare da una delle tue voci <b>RVC v2</b>.</p>'
+                        )
+                        tts_text_input = gr.Textbox(
+                            label="Testo da far dire alla voce RVC",
+                            placeholder="Es: Ciao! Sono Miku e questo e AI Cover Studio!",
+                            lines=4,
+                        )
+                        with gr.Row():
+                            tts_rvc_dd = gr.Dropdown(
+                                choices=INITIAL_LABELS,
+                                value=DEFAULT_V1,
+                                label="Voce RVC di destinazione",
+                            )
+                            tts_base_dd = gr.Dropdown(
+                                choices=TTS_VOICES_LIST,
+                                value="it-IT-ElsaNeural",
+                                label="Voce Base TTS (lingua e pronuncia)",
+                            )
+                        with gr.Row():
+                            tts_pitch_mode = gr.Radio(
+                                choices=["Auto", "-12", "0", "+12", "Manuale"],
+                                value="Auto",
+                                label="Pitch",
+                            )
+                            tts_pitch_manual = gr.Slider(
+                                minimum=-24,
+                                maximum=24,
+                                value=0,
+                                step=1,
+                                label="Pitch Manuale (semitoni)",
+                                visible=False,
+                            )
+                        with gr.Row():
+                            tts_rate_slider = gr.Slider(
+                                minimum=-50,
+                                maximum=50,
+                                value=0,
+                                step=5,
+                                label="Velocita parlato (%)",
+                            )
+                            tts_index_slider = gr.Slider(
+                                minimum=0.0,
+                                maximum=1.0,
+                                value=0.75,
+                                step=0.05,
+                                label="Index Rate",
+                            )
+                        tts_btn = gr.Button("Genera Parlato RVC", variant="primary")
+                        tts_log_box = gr.Textbox(
+                            label="Log Text to Speech",
+                            lines=6,
+                            interactive=False,
+                            elem_classes=["journal-log"],
+                        )
+                        tts_audio_out = gr.Audio(
+                            label="Audio TTS Finale (MP3 320 kbps)",
+                            type="filepath",
+                        )
+
+                # TAB 5: Archivio Cover Generate
                 with gr.Tab("Archivio") as archive_tab:
                     with gr.Column(elem_classes=["journal-subbox"]):
                         gr.HTML(
@@ -2136,6 +2329,11 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
         inputs=[pitch2_mode],
         outputs=[pitch2_manual],
     )
+    tts_pitch_mode.change(
+        fn=lambda p: gr.update(visible=(p == "Manuale")),
+        inputs=[tts_pitch_mode],
+        outputs=[tts_pitch_manual],
+    )
 
     # Actions
     refresh_btn.click(
@@ -2174,6 +2372,26 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
             train_save_slider,
         ],
         outputs=[train_log_box, voice1_dd, voice2_dd],
+    )
+
+    tts_btn.click(
+        fn=generate_tts_rvc,
+        inputs=[
+            tts_text_input,
+            tts_rvc_dd,
+            tts_base_dd,
+            tts_pitch_mode,
+            tts_pitch_manual,
+            tts_rate_slider,
+            tts_index_slider,
+        ],
+        outputs=[tts_log_box, tts_audio_out],
+    )
+
+    tts_tab.select(
+        fn=lambda: gr.update(choices=scan_local_models()[1]),
+        inputs=[],
+        outputs=[tts_rvc_dd],
     )
 
     archive_refresh_btn.click(

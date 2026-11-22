@@ -2057,6 +2057,7 @@ def _load_data_uri(filename: str, mime: str = "image/gif") -> str:
 
 BG_SKY_URI = _load_data_uri("bg_sky.png", "image/png")
 GUMI_SPRITE_URI = _load_data_uri("sprite_gumi.png", "image/png")
+MIKU_SPRITE_URI = _load_data_uri("sprite_miku.png", "image/png")
 
 CUSTOM_CSS = f"""
 @keyframes sprite-hop {{
@@ -2499,6 +2500,9 @@ CHIBI_STAGE_HTML = f"""
 <div class="chibi-stage" aria-hidden="true">
     <div id="gumi-pet" class="vocaloid-walker" title="GUMI">
         <img class="chibi-pixel-sprite" src="{GUMI_SPRITE_URI}" alt="GUMI" draggable="false" />
+    </div>
+    <div id="miku-pet" class="vocaloid-walker" title="Hatsune Miku">
+        <img class="chibi-pixel-sprite" src="{MIKU_SPRITE_URI}" alt="Miku" draggable="false" />
     </div>
 </div>
 """
@@ -2984,19 +2988,19 @@ FORCE_LIGHT_HEAD = """
     new MutationObserver(stripDark).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     window.addEventListener('DOMContentLoaded', stripDark);
 
-    // Interactive Shimeji-style GUMI pet
-    function initGumiPet() {
-        const pet = document.getElementById('gumi-pet');
+    // Interactive Shimeji-style Vocaloid pets (GUMI & Miku)
+    function initShimejiPet(petId, startX, startVx, startDir, baseTone) {
+        const pet = document.getElementById(petId);
         if (!pet || pet.dataset.bound === '1') return;
         pet.dataset.bound = '1';
 
         const W = 44;
         const H = 50;
-        let x = 60;
+        let x = typeof startX === 'function' ? startX() : startX;
         let y = Math.max(0, window.innerHeight - H - 6);
-        let vx = 1.15;
+        let vx = startVx;
         let vy = 0;
-        let dir = 1;
+        let dir = startDir;
         let dragging = false;
         let movedDuringDrag = false;
         let dragOffsetX = 0;
@@ -3020,13 +3024,12 @@ FORCE_LIGHT_HEAD = """
                 if (audioCtx.state === 'suspended') audioCtx.resume();
 
                 const t = audioCtx.currentTime;
-                // Formant-filtered cute Vocaloid squeak + comedic censor bleep
                 const osc = audioCtx.createOscillator();
                 const filter = audioCtx.createBiquadFilter();
                 const gain = audioCtx.createGain();
 
                 osc.type = 'sawtooth';
-                const baseF = 520 + Math.min(260, intensity * 18);
+                const baseF = baseTone + Math.min(260, intensity * 18);
                 osc.frequency.setValueAtTime(baseF, t);
                 osc.frequency.exponentialRampToValueAtTime(baseF * 1.35, t + 0.07);
                 osc.frequency.exponentialRampToValueAtTime(baseF * 0.72, t + 0.16);
@@ -3166,9 +3169,14 @@ FORCE_LIGHT_HEAD = """
         requestAnimationFrame(tick);
     }
 
-    const observer = new MutationObserver(initGumiPet);
+    function initAllPets() {
+        initShimejiPet('gumi-pet', 60, 1.15, 1, 520);
+        initShimejiPet('miku-pet', () => Math.max(120, window.innerWidth - 110), -1.05, -1, 640);
+    }
+
+    const observer = new MutationObserver(initAllPets);
     observer.observe(document.documentElement, { childList: true, subtree: true });
-    window.addEventListener('DOMContentLoaded', initGumiPet);
+    window.addEventListener('DOMContentLoaded', initAllPets);
 })();
 </script>
 """

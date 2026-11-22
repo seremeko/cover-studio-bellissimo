@@ -2999,19 +2999,12 @@ FORCE_LIGHT_HEAD = """
         pet.dataset.bound = '1';
 
         const W = 44;
-        function getH() {
-            return pet.getBoundingClientRect().height || 56;
-        }
-        function floorY() {
-            return Math.max(0, window.innerHeight - getH() - 32);
-        }
-
+        const H = 50;
         let x = typeof startX === 'function' ? startX() : startX;
-        let y = floorY();
+        let y = Math.max(0, window.innerHeight - H - 6);
         let vx = startVx;
         let vy = 0;
         let dir = startDir;
-        let floatPhase = Math.random() * Math.PI * 2;
         let dragging = false;
         let movedDuringDrag = false;
         let dragOffsetX = 0;
@@ -3075,6 +3068,10 @@ FORCE_LIGHT_HEAD = """
             } catch (err) {}
         }
 
+        function floorY() {
+            return Math.max(0, window.innerHeight - H - 6);
+        }
+
         pet.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             dragging = true;
@@ -3130,7 +3127,7 @@ FORCE_LIGHT_HEAD = """
             vx = dir * 2.2;
         });
 
-        function tick(now) {
+        function tick() {
             const fy = floorY();
             if (!dragging) {
                 if (y < fy || vy < 0) {
@@ -3149,7 +3146,7 @@ FORCE_LIGHT_HEAD = """
                         }
                     }
                 } else {
-                    y = fy + Math.sin((now || 0) * 0.004 + floatPhase) * 9;
+                    y = fy;
                     x += vx;
                     if (Math.abs(vx) < 0.8) vx = dir * 1.15;
                 }

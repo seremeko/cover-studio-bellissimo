@@ -2218,7 +2218,20 @@ footer {{
 }}
 
 /* Top Journal Header Card */
+.journal-header-block,
+.journal-header-block > div,
+.ipod-html-block,
+.ipod-html-block > div {{
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}}
+
 .journal-header {{
+    width: 100%;
+    box-sizing: border-box;
     background: #fffdfd;
     border: 2px solid #f29ec0;
     box-shadow: 4px 4px 0px rgba(242, 158, 192, 0.55);
@@ -2978,11 +2991,11 @@ CHIBI_STAGE_HTML = f"""
 """
 
 with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
-    gr.HTML(HEADER_HTML)
+    gr.HTML(HEADER_HTML, elem_classes=["journal-header-block"])
 
     with gr.Row(equal_height=False):
         with gr.Column(scale=1, min_width=300):
-            ipod_player_html = gr.HTML(render_ipod_player_html())
+            ipod_player_html = gr.HTML(render_ipod_player_html(), elem_classes=["ipod-html-block"])
             with gr.Column(elem_classes=["journal-sidebar"]):
                 gr.HTML(SIDEBAR_HTML)
 

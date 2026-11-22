@@ -2517,9 +2517,10 @@ button:active {{
     background: linear-gradient(180deg, #fff7fb 0%, #ffeaf4 100%);
     border: 2px solid #9e4374;
     border-radius: 9px;
-    padding: 6px 8px;
+    padding: 7px 8px;
     box-shadow: inset 0 2px 4px rgba(158, 67, 116, 0.14);
     box-sizing: border-box;
+    overflow: hidden;
 }}
 
 .ipod-menu-list {{
@@ -2530,6 +2531,7 @@ button:active {{
     margin: 4px 0;
     padding: 2px;
     font-size: 10px;
+    box-sizing: border-box;
 }}
 
 .ipod-menu-item {{
@@ -2548,23 +2550,66 @@ button:active {{
 .ipod-vol-row {{
     display: flex;
     align-items: center;
-    gap: 5px;
-    margin-top: 5px;
-    padding: 3px 5px;
+    gap: 6px;
+    width: 100%;
+    max-width: 100%;
+    margin-top: 6px;
+    padding: 4px 6px;
     background: #fffafd;
     border: 1px dashed #f29ec0;
     border-radius: 5px;
+    box-sizing: border-box;
+    overflow: hidden;
 }}
 
 .ipod-vol-slider {{
-    flex: 1;
-    accent-color: #ff6ea9;
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1 1 0%;
+    min-width: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 6px;
+    background: #ffd1e3;
+    border: 1px solid #d982a8;
+    border-radius: 999px;
+    outline: none;
+    margin: 0 !important;
+    padding: 0 !important;
+    cursor: pointer;
+    box-sizing: border-box;
+}}
+
+.ipod-vol-slider::-webkit-slider-thumb {{
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
     height: 12px;
+    border-radius: 50%;
+    background: #ff6ea9;
+    border: 1.5px solid #9e4374;
     cursor: pointer;
 }}
 
+.ipod-vol-slider::-moz-range-thumb {{
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ff6ea9;
+    border: 1.5px solid #9e4374;
+    cursor: pointer;
+}}
+
+.ipod-vol-pct {{
+    flex-shrink: 0;
+    min-width: 28px;
+    text-align: right;
+    font-size: 9px;
+    font-weight: bold;
+    color: #7a2652;
+}}
+
 .ipod-dl {{
-    margin-left: auto;
     text-decoration: none !important;
 }}
 
@@ -2612,17 +2657,21 @@ button:active {{
 }}
 
 .ipod-progress {{
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(14, minmax(0, 1fr));
     gap: 2px;
+    width: 100%;
     margin-bottom: 6px;
     cursor: pointer;
+    box-sizing: border-box;
 }}
 
 .ipod-seg {{
-    flex: 1;
+    width: 100%;
     height: 8px;
     background: #fffafd;
     border: 1px solid #d982a8;
+    box-sizing: border-box;
 }}
 
 .ipod-seg.filled {{
@@ -2630,22 +2679,39 @@ button:active {{
 }}
 
 .ipod-mini-btns {{
-    display: flex;
-    align-items: center;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 4px;
+    width: 100%;
+    box-sizing: border-box;
 }}
 
 .ipod-btn {{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+    height: 24px;
+    padding: 0 2px;
+    margin: 0;
+    box-sizing: border-box;
     background: linear-gradient(180deg, #fffafd 0%, #ffd1e3 100%);
     border: 1.5px solid #9e4374;
     border-radius: 4px;
-    color: #7a2652;
+    color: #7a2652 !important;
     font-family: "Courier New", monospace;
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 900;
-    padding: 2px 6px;
+    line-height: 1;
+    text-decoration: none !important;
     cursor: pointer;
     box-shadow: 1px 1px 0 #e07ba4;
+    white-space: nowrap;
+}}
+
+.ipod-btn:hover {{
+    background: linear-gradient(180deg, #ffffff 0%, #ffb8d4 100%);
 }}
 
 .ipod-btn:active {{
@@ -2714,43 +2780,55 @@ button:active {{
 
 .ipod-wheel {{
     position: relative;
-    width: 94px;
-    height: 94px;
+    width: 124px;
+    height: 124px;
     border-radius: 50%;
     background: #fffafd;
     border: 2px solid #e07ba4;
     box-shadow: inset 0 2px 5px rgba(224, 123, 164, 0.25), 2px 2px 0 rgba(242, 158, 192, 0.5);
+    box-sizing: border-box;
 }}
 
 .wheel-zone {{
     position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: transparent;
     border: none;
     color: #9e4374;
     font-family: "Courier New", monospace;
     font-size: 10px;
     font-weight: 900;
+    line-height: 1;
     cursor: pointer;
-    padding: 4px;
+    padding: 0;
+    margin: 0;
+    user-select: none;
 }}
 
-.wheel-top    {{ top: 6px; left: 50%; transform: translateX(-50%); }}
-.wheel-bottom {{ bottom: 6px; left: 50%; transform: translateX(-50%); }}
-.wheel-left   {{ left: 6px; top: 50%; transform: translateY(-50%); }}
-.wheel-right  {{ right: 6px; top: 50%; transform: translateY(-50%); }}
+.wheel-zone:hover {{
+    color: #ff6ea9;
+}}
+
+.wheel-top    {{ top: 10px; left: 50%; transform: translateX(-50%); width: 52px; height: 20px; }}
+.wheel-bottom {{ bottom: 10px; left: 50%; transform: translateX(-50%); width: 44px; height: 20px; }}
+.wheel-left   {{ left: 8px; top: 50%; transform: translateY(-50%); width: 24px; height: 28px; }}
+.wheel-right  {{ right: 8px; top: 50%; transform: translateY(-50%); width: 24px; height: 28px; }}
 
 .wheel-center {{
     position: absolute;
     left: 50%;
     top: 50%;
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
     transform: translate(-50%, -50%);
     border-radius: 50%;
     background: linear-gradient(180deg, #ffe6f0 0%, #ff9ec6 100%);
     border: 2px solid #e07ba4;
     cursor: pointer;
     box-shadow: inset 0 1px 2px #ffffff;
+    padding: 0;
 }}
 
 /* Roaming Pixel-Art Sprites */

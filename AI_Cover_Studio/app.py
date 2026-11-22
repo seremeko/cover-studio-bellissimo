@@ -2058,6 +2058,7 @@ def _load_data_uri(filename: str, mime: str = "image/gif") -> str:
 BG_SKY_URI = _load_data_uri("bg_sky.png", "image/png")
 GUMI_SPRITE_URI = _load_data_uri("sprite_gumi.png", "image/png")
 MIKU_SPRITE_URI = _load_data_uri("sprite_miku.png", "image/png")
+RENA_SPRITE_URI = _load_data_uri("sprite_rena.png", "image/png")
 
 CUSTOM_CSS = f"""
 @keyframes sprite-hop {{
@@ -2503,6 +2504,9 @@ CHIBI_STAGE_HTML = f"""
     </div>
     <div id="miku-pet" class="vocaloid-walker" title="Hatsune Miku">
         <img class="chibi-pixel-sprite" src="{MIKU_SPRITE_URI}" alt="Miku" draggable="false" />
+    </div>
+    <div id="rena-pet" class="vocaloid-walker" title="Rena">
+        <img class="chibi-pixel-sprite" src="{RENA_SPRITE_URI}" alt="Rena" draggable="false" />
     </div>
 </div>
 """
@@ -3172,6 +3176,7 @@ FORCE_LIGHT_HEAD = """
     function initAllPets() {
         initShimejiPet('gumi-pet', 60, 1.15, 1, 520);
         initShimejiPet('miku-pet', () => Math.max(120, window.innerWidth - 110), -1.05, -1, 640);
+        initShimejiPet('rena-pet', () => Math.max(80, Math.floor(window.innerWidth * 0.45)), 0.95, 1, 580);
     }
 
     const observer = new MutationObserver(initAllPets);

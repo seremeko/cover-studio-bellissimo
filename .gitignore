@@ -10,6 +10,7 @@ __pycache__/
 # Already-made songs, Audio & Stems
 output/
 AI_Cover_Studio/output/
+AI_Cover_Studio/datasets/
 separated/
 Alle_Donne_Piacciono_Teto_Miku/
 Cantarella_Definitivo/

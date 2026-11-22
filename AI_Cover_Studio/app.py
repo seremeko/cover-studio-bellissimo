@@ -925,6 +925,192 @@ def install_from_direct_url(direct_url: str, custom_name: str, progress=gr.Progr
 
 
 # ---------------------------------------------------------------------------
+# RVC v2 Voice Training Pipeline (via rvc_cli)
+# ---------------------------------------------------------------------------
+def train_rvc_voice(
+    model_name: str,
+    dataset_files: list[str] | None,
+    extract_vocals_demucs: bool,
+    sample_rate_str: str,
+    total_epochs: int,
+    batch_size: int,
+    save_every_epoch: int,
+    progress=gr.Progress(),
+):
+    logs = []
+
+    def log(msg: str):
+        logs.append(msg)
+        return "\n".join(logs)
+
+    safe_name = sanitize_name((model_name or "").strip(), default="")
+    if not safe_name:
+        yield log("[ERRORE] Inserisci un nome valido per la nuova voce."), gr.update(), gr.update()
+        return
+
+    if not dataset_files:
+        yield log("[ERRORE] Carica almeno un file audio/video per il dataset."), gr.update(), gr.update()
+        return
+
+    sr = int(sample_rate_str)
+    epochs = int(total_epochs)
+    bs = int(batch_size)
+    save_every = min(epochs, max(1, int(save_every_epoch)))
+    cpu_n = os.cpu_count() or 4
+    gpu_arg = 0 if torch.cuda.is_available() else "-"
+
+    datasets_root = os.path.join(APP_DIR, "datasets", safe_name)
+    raw_dir = os.path.join(datasets_root, "raw")
+    clean_dir = os.path.join(datasets_root, "vocals")
+    os.makedirs(raw_dir, exist_ok=True)
+    os.makedirs(clean_dir, exist_ok=True)
+
+    progress(0.05, desc="Preparazione dataset...")
+    yield log(f"[TRAIN 1/5] Preparazione dataset per '{safe_name}' (device={'GPU' if gpu_arg == 0 else 'CPU'})..."), gr.update(), gr.update()
+
+    converted_wavs = []
+    for idx, fpath in enumerate(dataset_files):
+        if not fpath or not os.path.exists(fpath):
+            continue
+        out_wav = os.path.join(raw_dir, f"clip_{idx:03d}.wav")
+        try:
+            (
+                ffmpeg
+                .input(fpath)
+                .output(out_wav, acodec="pcm_s16le", ar=sr, ac=1)
+                .overwrite_output()
+                .run(cmd=FFMPEG_EXE, quiet=True)
+            )
+            if os.path.exists(out_wav) and os.path.getsize(out_wav) > 1024:
+                converted_wavs.append(out_wav)
+        except Exception as e:
+            yield log(f"[AVVISO] Impossibile convertire {os.path.basename(fpath)}: {e}"), gr.update(), gr.update()
+
+    if not converted_wavs:
+        yield log("[ERRORE] Nessun file audio valido convertito per il training."), gr.update(), gr.update()
+        return
+
+    if extract_vocals_demucs:
+        progress(0.15, desc="Estrazione voce con Demucs...")
+        yield log(f"[TRAIN 1B/5] Separazione voce con Demucs su {len(converted_wavs)} file..."), gr.update(), gr.update()
+        sep_dir = os.path.join(datasets_root, "separated")
+        subprocess.run(
+            [DEMUCS_EXE, "--two-stems=vocals", "-n", "htdemucs", "-j", str(cpu_n), "-o", sep_dir, *converted_wavs],
+            check=True,
+        )
+        for idx, wpath in enumerate(converted_wavs):
+            stem = Path(wpath).stem
+            v_src = os.path.join(sep_dir, "htdemucs", stem, "vocals.wav")
+            if os.path.exists(v_src):
+                shutil.copy2(v_src, os.path.join(clean_dir, f"vocal_{idx:03d}.wav"))
+    else:
+        for idx, wpath in enumerate(converted_wavs):
+            shutil.copy2(wpath, os.path.join(clean_dir, f"vocal_{idx:03d}.wav"))
+
+    prev_cwd = os.getcwd()
+    try:
+        os.chdir(RVC_DIR)
+        if RVC_DIR not in sys.path:
+            sys.path.insert(0, RVC_DIR)
+        import core as rvc_core
+
+        progress(0.25, desc="Verifica prerequisiti HiFi-GAN...")
+        yield log("[TRAIN 2/5] Verifica prerequisiti RVC v2 (HiFi-GAN pretrained)..."), gr.update(), gr.update()
+        rvc_core.run_prerequisites_script(pretraineds_hifigan=True, models=False, exe=False)
+
+        progress(0.35, desc="Preprocessing e taglio clip...")
+        yield log("[TRAIN 3/5] Preprocessing dataset (taglio automatico)..."), gr.update(), gr.update()
+        msg_prep = rvc_core.run_preprocess_script(
+            model_name=safe_name,
+            dataset_path=clean_dir,
+            sample_rate=sr,
+            cpu_cores=cpu_n,
+            cut_preprocess="Automatic",
+            process_effects=False,
+            chunk_len=3.0,
+            overlap_len=0.3,
+            normalization_mode="none",
+        )
+        yield log(f"  -> {msg_prep}"), gr.update(), gr.update()
+
+        progress(0.50, desc="Estrazione F0 (rmvpe) e feature (contentvec)...")
+        yield log("[TRAIN 4/5] Estrazione pitch (rmvpe) e feature (contentvec)..."), gr.update(), gr.update()
+        msg_ext = rvc_core.run_extract_script(
+            model_name=safe_name,
+            f0_method="rmvpe",
+            cpu_cores=cpu_n,
+            gpu=gpu_arg,
+            sample_rate=sr,
+            embedder_model="contentvec",
+            include_mutes=2,
+        )
+        yield log(f"  -> {msg_ext}"), gr.update(), gr.update()
+
+        progress(0.65, desc=f"Training modello ({epochs} epoche)...")
+        yield log(f"[TRAIN 5/5] Avvio training RVC v2 ({epochs} epoche, batch={bs}, sr={sr}). Attendere..."), gr.update(), gr.update()
+        msg_tr = rvc_core.run_train_script(
+            model_name=safe_name,
+            save_every_epoch=save_every,
+            save_only_latest=True,
+            save_every_weights=True,
+            total_epoch=epochs,
+            sample_rate=sr,
+            batch_size=bs,
+            gpu=gpu_arg,
+            pretrained=True,
+            cleanup=False,
+            index_algorithm="Auto",
+        )
+        yield log(f"  -> {msg_tr}"), gr.update(), gr.update()
+    except Exception as e:
+        yield log(f"[ERRORE TRAINING] {e}"), gr.update(), gr.update()
+        return
+    finally:
+        os.chdir(prev_cwd)
+
+    # Locate generated .pth and .index in rvc_cli/logs/<safe_name>/
+    rvc_logs_dir = os.path.join(RVC_DIR, "logs", safe_name)
+    pth_candidates = []
+    idx_candidates = []
+    if os.path.isdir(rvc_logs_dir):
+        for r, _, fnames in os.walk(rvc_logs_dir):
+            for fn in fnames:
+                fp = os.path.join(r, fn)
+                if fn.lower().endswith(".pth") and not fn.startswith(("G_", "D_")):
+                    pth_candidates.append(fp)
+                elif fn.lower().endswith(".index") and "trained" not in fn.lower():
+                    idx_candidates.append(fp)
+        if not idx_candidates:
+            for r, _, fnames in os.walk(rvc_logs_dir):
+                for fn in fnames:
+                    if fn.lower().endswith(".index"):
+                        idx_candidates.append(os.path.join(r, fn))
+
+    if not pth_candidates:
+        yield log(f"[ERRORE] Training terminato ma nessun file .pth trovato in {rvc_logs_dir}."), gr.update(), gr.update()
+        return
+
+    # Pick newest / highest epoch .pth
+    best_pth = max(pth_candidates, key=os.path.getmtime)
+    dest_dir = os.path.join(MODELS_DIR, "custom", safe_name)
+    os.makedirs(dest_dir, exist_ok=True)
+    shutil.copy2(best_pth, os.path.join(dest_dir, f"{safe_name}.pth"))
+    if idx_candidates:
+        best_idx = max(idx_candidates, key=os.path.getmtime)
+        shutil.copy2(best_idx, os.path.join(dest_dir, f"{safe_name}.index"))
+
+    global MODEL_REGISTRY
+    MODEL_REGISTRY, labels = scan_local_models()
+    new_label = f"custom/{safe_name}" if f"custom/{safe_name}" in MODEL_REGISTRY else (labels[0] if labels else None)
+    progress(1.0, desc="Voce addestrata e installata!")
+    yield (
+        log(f"[COMPLETATO] Nuova voce salvata in models/custom/{safe_name} e aggiunta ai menu!"),
+        gr.update(choices=labels, value=new_label),
+        gr.update(choices=labels, value=new_label),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main Cover Generation Pipeline
 # ---------------------------------------------------------------------------
 def generate_cover(
@@ -1847,7 +2033,64 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                             elem_classes=["journal-log"],
                         )
 
-                # TAB 3: Archivio Cover Generate
+                # TAB 3: Crea Voce (Training RVC v2)
+                with gr.Tab("Crea Voce (Training)"):
+                    with gr.Column(elem_classes=["journal-subbox"]):
+                        gr.HTML(
+                            '<p style="font-size:12px;margin:0 0 8px 0;">Addestra un nuovo modello vocale <b>RVC v2</b> dai tuoi file audio. '
+                            '<i>Nota: su PC senza GPU NVIDIA il training gira su CPU ed e lento (consigliate 20-50 epoche su 2-5 min di voce pulita per i test).</i></p>'
+                        )
+                        train_name_input = gr.Textbox(
+                            label="Nome della nuova voce",
+                            placeholder="Es: mia_voce_custom",
+                        )
+                        train_files_input = gr.File(
+                            label="File audio/video per il dataset (WAV / MP3 / MP4)",
+                            file_count="multiple",
+                            file_types=[".wav", ".mp3", ".mp4", ".m4a", ".flac", ".ogg"],
+                            type="filepath",
+                        )
+                        train_demucs_cb = gr.Checkbox(
+                            value=False,
+                            label="Estrai prima la voce con Demucs (attiva se i file contengono musica di sottofondo)",
+                        )
+                        with gr.Row():
+                            train_sr_radio = gr.Radio(
+                                choices=["40000", "48000"],
+                                value="40000",
+                                label="Sample Rate",
+                            )
+                            train_epochs_slider = gr.Slider(
+                                minimum=10,
+                                maximum=500,
+                                value=50,
+                                step=10,
+                                label="Epoche Totali",
+                            )
+                        with gr.Row():
+                            train_batch_slider = gr.Slider(
+                                minimum=1,
+                                maximum=16,
+                                value=4,
+                                step=1,
+                                label="Batch Size",
+                            )
+                            train_save_slider = gr.Slider(
+                                minimum=5,
+                                maximum=100,
+                                value=10,
+                                step=5,
+                                label="Salva checkpoint ogni N epoche",
+                            )
+                        train_btn = gr.Button("Avvia Training RVC v2", variant="primary")
+                        train_log_box = gr.Textbox(
+                            label="Log Training RVC v2",
+                            lines=10,
+                            interactive=False,
+                            elem_classes=["journal-log"],
+                        )
+
+                # TAB 4: Archivio Cover Generate
                 with gr.Tab("Archivio") as archive_tab:
                     with gr.Column(elem_classes=["journal-subbox"]):
                         gr.HTML(
@@ -1917,6 +2160,20 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
         fn=install_from_direct_url,
         inputs=[direct_url_input, direct_name_input],
         outputs=[hf_log_box, voice1_dd, voice2_dd],
+    )
+
+    train_btn.click(
+        fn=train_rvc_voice,
+        inputs=[
+            train_name_input,
+            train_files_input,
+            train_demucs_cb,
+            train_sr_radio,
+            train_epochs_slider,
+            train_batch_slider,
+            train_save_slider,
+        ],
+        outputs=[train_log_box, voice1_dd, voice2_dd],
     )
 
     archive_refresh_btn.click(

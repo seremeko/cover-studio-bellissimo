@@ -360,6 +360,64 @@ def load_stereo(path: str, target_sr: int = 44100) -> np.ndarray:
     return y
 
 
+def _build_complementary_timelines(
+    vocals_path: str,
+    track2_intervals: list[tuple[int, int]],
+    track1_out: str,
+    track2_out: str,
+    fade_ms: int = 100,
+) -> None:
+    """
+    Splits vocals_path into two complementary WAV timelines (track1 gets everything
+    outside track2_intervals, track2 gets track2_intervals) with crossfades.
+    """
+    vocals_seg = AudioSegment.from_wav(vocals_path)
+    total_len = len(vocals_seg)
+
+    t1_timeline = AudioSegment.empty()
+    t2_timeline = AudioSegment.empty()
+    cursor = 0
+
+    for s_ms, e_ms in track2_intervals:
+        if s_ms > cursor:
+            seg1 = vocals_seg[cursor:s_ms]
+            if cursor > 0 and len(seg1) > 0:
+                seg1 = seg1.fade_in(min(fade_ms, len(seg1)))
+            if len(seg1) > 0:
+                seg1 = seg1.fade_out(min(fade_ms, len(seg1)))
+            t1_timeline += seg1
+
+            t2_timeline += AudioSegment.silent(
+                duration=s_ms - cursor,
+                frame_rate=vocals_seg.frame_rate,
+            ).set_channels(vocals_seg.channels).set_sample_width(vocals_seg.sample_width)
+
+        seg2 = vocals_seg[s_ms:e_ms]
+        if len(seg2) > 0:
+            seg2 = seg2.fade_in(min(fade_ms, len(seg2))).fade_out(min(fade_ms, len(seg2)))
+        t2_timeline += seg2
+
+        t1_timeline += AudioSegment.silent(
+            duration=e_ms - s_ms,
+            frame_rate=vocals_seg.frame_rate,
+        ).set_channels(vocals_seg.channels).set_sample_width(vocals_seg.sample_width)
+        cursor = e_ms
+
+    if cursor < total_len:
+        seg1 = vocals_seg[cursor:total_len]
+        if cursor > 0 and len(seg1) > 0:
+            seg1 = seg1.fade_in(min(fade_ms, len(seg1)))
+        t1_timeline += seg1
+
+        t2_timeline += AudioSegment.silent(
+            duration=total_len - cursor,
+            frame_rate=vocals_seg.frame_rate,
+        ).set_channels(vocals_seg.channels).set_sample_width(vocals_seg.sample_width)
+
+    t1_timeline.export(track1_out, format="wav")
+    t2_timeline.export(track2_out, format="wav")
+
+
 def split_vocals_by_f0(
     vocals_path: str,
     male_out: str,
@@ -445,51 +503,154 @@ def split_vocals_by_f0(
     final_female_tuples = [(s, e) for s, e in final_female]
 
     female_med_hz = float(np.median(female_f0_values)) if female_f0_values else 0.0
-
-    male_timeline = AudioSegment.empty()
-    female_timeline = AudioSegment.empty()
-    cursor = 0
-
-    for s_ms, e_ms in final_female_tuples:
-        if s_ms > cursor:
-            seg_m = vocals_seg[cursor:s_ms]
-            if cursor > 0 and len(seg_m) > 0:
-                seg_m = seg_m.fade_in(min(fade_ms, len(seg_m)))
-            if len(seg_m) > 0:
-                seg_m = seg_m.fade_out(min(fade_ms, len(seg_m)))
-            male_timeline += seg_m
-
-            female_timeline += AudioSegment.silent(
-                duration=s_ms - cursor,
-                frame_rate=vocals_seg.frame_rate,
-            ).set_channels(vocals_seg.channels).set_sample_width(vocals_seg.sample_width)
-
-        seg_f = vocals_seg[s_ms:e_ms]
-        if len(seg_f) > 0:
-            seg_f = seg_f.fade_in(min(fade_ms, len(seg_f))).fade_out(min(fade_ms, len(seg_f)))
-        female_timeline += seg_f
-
-        male_timeline += AudioSegment.silent(
-            duration=e_ms - s_ms,
-            frame_rate=vocals_seg.frame_rate,
-        ).set_channels(vocals_seg.channels).set_sample_width(vocals_seg.sample_width)
-        cursor = e_ms
-
-    if cursor < total_len:
-        seg_m = vocals_seg[cursor:total_len]
-        if cursor > 0 and len(seg_m) > 0:
-            seg_m = seg_m.fade_in(min(fade_ms, len(seg_m)))
-        male_timeline += seg_m
-
-        female_timeline += AudioSegment.silent(
-            duration=total_len - cursor,
-            frame_rate=vocals_seg.frame_rate,
-        ).set_channels(vocals_seg.channels).set_sample_width(vocals_seg.sample_width)
-
-    male_timeline.export(male_out, format="wav")
-    female_timeline.export(female_out, format="wav")
+    _build_complementary_timelines(vocals_path, final_female_tuples, male_out, female_out, fade_ms=fade_ms)
 
     return final_female_tuples, global_med, female_med_hz
+
+
+def split_vocals_by_timbre(
+    vocals_path: str,
+    voice1_out: str,
+    voice2_out: str,
+    fade_ms: int = 100,
+) -> tuple[list[tuple[int, int]], int, int]:
+    """
+    Separates same-gender duets (2 male or 2 female voices) into two complementary
+    timelines by segmenting active vocal phrases and clustering pitch-invariant
+    timbre embeddings (MFCC 2..20, spectral contrast/centroid/bandwidth + soft F0).
+    """
+    from sklearn.cluster import AgglomerativeClustering, KMeans
+    from sklearn.preprocessing import StandardScaler, normalize
+
+    y, sr = sf.read(vocals_path, always_2d=True)
+    y_mono = np.mean(y, axis=1).astype(np.float32)
+    total_ms = int(len(y_mono) * 1000.0 / sr)
+
+    frame_ms = 20.0
+    hop = int(sr * frame_ms / 1000.0)
+    n_frames = max(1, len(y_mono) // hop)
+    rms = np.array(
+        [
+            float(np.sqrt(np.mean(y_mono[idx * hop : min(len(y_mono), (idx + 1) * hop)] ** 2)))
+            for idx in range(n_frames)
+        ],
+        dtype=np.float64,
+    )
+
+    active = rms > 0.010
+    raw_phrases: list[list[int]] = []
+    i = 0
+    while i < n_frames:
+        if not active[i]:
+            i += 1
+            continue
+        s_f = i
+        while i < n_frames and active[i]:
+            i += 1
+        raw_phrases.append([int(s_f * frame_ms), int(i * frame_ms)])
+
+    # Merge short pauses <= 260ms, discard tiny breaths < 260ms
+    merged: list[list[int]] = []
+    for s_ms, e_ms in raw_phrases:
+        if not merged or s_ms - merged[-1][1] > 260:
+            merged.append([s_ms, e_ms])
+        else:
+            merged[-1][1] = e_ms
+
+    phrases: list[tuple[int, int]] = []
+    for s_ms, e_ms in merged:
+        dur = e_ms - s_ms
+        if dur < 260:
+            continue
+        # Split long continuous singing blocks > 4.2s into ~2.4s chunks so mid-verse handoffs are caught
+        if dur > 4200:
+            cur = s_ms
+            while cur < e_ms:
+                nxt = min(e_ms, cur + 2400)
+                if e_ms - nxt < 900:
+                    nxt = e_ms
+                phrases.append((cur, nxt))
+                cur = nxt
+        else:
+            phrases.append((s_ms, e_ms))
+
+    if len(phrases) < 2:
+        _build_complementary_timelines(vocals_path, [], voice1_out, voice2_out, fade_ms=fade_ms)
+        return [], len(phrases), 0
+
+    # Extract timbre feature vector per phrase
+    feats = []
+    for s_ms, e_ms in phrases:
+        s_idx = max(0, int(s_ms * sr / 1000.0))
+        e_idx = min(len(y_mono), int(e_ms * sr / 1000.0))
+        seg = y_mono[s_idx:e_idx]
+        if len(seg) < int(0.15 * sr):
+            seg = np.pad(seg, (0, int(0.15 * sr) - len(seg)))
+
+        # MFCCs 2..20 (skip c0 energy and c1 gross tilt to stay pitch/volume invariant)
+        mfcc = librosa.feature.mfcc(y=seg, sr=sr, n_mfcc=21, hop_length=512)
+        mfcc_sub = mfcc[2:21, :]
+        mfcc_mean = np.mean(mfcc_sub, axis=1)
+        mfcc_std = np.std(mfcc_sub, axis=1)
+
+        contrast = librosa.feature.spectral_contrast(y=seg, sr=sr, hop_length=512)
+        contrast_mean = np.mean(contrast, axis=1)
+
+        centroid = float(np.mean(librosa.feature.spectral_centroid(y=seg, sr=sr, hop_length=512)))
+        bandwidth = float(np.mean(librosa.feature.spectral_bandwidth(y=seg, sr=sr, hop_length=512)))
+        rolloff = float(np.mean(librosa.feature.spectral_rolloff(y=seg, sr=sr, hop_length=512)))
+
+        # Soft F0 cue in log2-Hz (down-weighted later so same-gender timbre dominates)
+        _f0_seg, t_seg = pw.dio(seg.astype(np.float64), sr, frame_period=20.0, f0_floor=65.0, f0_ceil=600.0)
+        voiced_seg = _f0_seg[_f0_seg > 70.0]
+        log_f0 = float(np.log2(np.median(voiced_seg))) if len(voiced_seg) > 2 else 7.2
+
+        vec = np.concatenate([
+            mfcc_mean,
+            mfcc_std * 0.5,
+            contrast_mean * 0.8,
+            np.array([centroid / 1000.0, bandwidth / 1000.0, rolloff / 1000.0, log_f0 * 0.35], dtype=np.float64),
+        ])
+        feats.append(vec)
+
+    X = np.vstack(feats)
+    X_scaled = StandardScaler().fit_transform(X)
+    X_norm = normalize(X_scaled, norm="l2")
+
+    labels = AgglomerativeClustering(n_clusters=2, metric="cosine", linkage="average").fit_predict(X_norm)
+    counts = np.bincount(labels, minlength=2)
+    if len(phrases) >= 4 and np.min(counts) < 2:
+        labels = KMeans(n_clusters=2, n_init=20, random_state=42).fit_predict(X_norm)
+
+    # Temporal smoothing: flip isolated short (< 900ms) single-phrase blips
+    smoothed = labels.copy()
+    for idx in range(1, len(smoothed) - 1):
+        dur = phrases[idx][1] - phrases[idx][0]
+        if dur < 900 and smoothed[idx - 1] == smoothed[idx + 1] and smoothed[idx] != smoothed[idx - 1]:
+            smoothed[idx] = smoothed[idx - 1]
+
+    # Chronological convention: first singer to appear = cluster 0 (Voce Principale)
+    if smoothed[0] != 0:
+        smoothed = 1 - smoothed
+
+    raw_v2 = [
+        (max(0, phrases[idx][0] - 80), min(total_ms, phrases[idx][1] + 80))
+        for idx, lbl in enumerate(smoothed)
+        if lbl == 1
+    ]
+    merged_v2: list[list[int]] = []
+    for s_ms, e_ms in raw_v2:
+        if not merged_v2 or s_ms > merged_v2[-1][1]:
+            merged_v2.append([s_ms, e_ms])
+        else:
+            merged_v2[-1][1] = max(merged_v2[-1][1], e_ms)
+
+    v2_intervals = [(s, e) for s, e in merged_v2]
+    _build_complementary_timelines(vocals_path, v2_intervals, voice1_out, voice2_out, fade_ms=fade_ms)
+
+    n_v1 = int(np.sum(smoothed == 0))
+    n_v2 = int(np.sum(smoothed == 1))
+    return v2_intervals, n_v1, n_v2
 
 
 def run_rvc_inference(
@@ -1972,20 +2133,32 @@ def generate_cover(
         yield log(f"[STEP 4/5] RVC completato: {msg1}"), None
         female_intervals = []
     else:
-        progress(0.45, desc="Step 3/5: Split F0 Maschile/Femminile...")
-        yield log("[STEP 3/5] Analisi F0 + split Maschile/Femminile con crossfade 100ms..."), None
-
+        is_timbre_duet = "Timbro" in mode or "Stesso Genere" in mode
         male_wav = os.path.join(work_dir, "vocals_male.wav")
         female_wav = os.path.join(work_dir, "vocals_female.wav")
-        female_intervals, male_med, female_med = split_vocals_by_f0(
-            vocals_wav, male_wav, female_wav, fade_ms=100
-        )
-        yield log(
-            f"[STEP 3/5] Split completato: {len(female_intervals)} segmenti femminili "
-            f"(F0 globale={male_med:.1f} Hz, F0 femminile={female_med:.1f} Hz)"
-        ), None
 
-        progress(0.60, desc="Step 4/5: Inferenza RVC Voce Principale (traccia maschile)...")
+        if is_timbre_duet:
+            progress(0.45, desc="Step 3/5: Clustering Timbro (Duetto Stesso Genere)...")
+            yield log("[STEP 3/5] Analisi timbrica MFCC/spettrale per separare 2 voci dello stesso genere..."), None
+            female_intervals, n_v1, n_v2 = split_vocals_by_timbre(
+                vocals_wav, male_wav, female_wav, fade_ms=100
+            )
+            yield log(
+                f"[STEP 3/5] Split timbrico completato: {n_v1} frasi Voce 1, {n_v2} frasi Voce 2 "
+                f"({len(female_intervals)} turni sulla Seconda Voce)"
+            ), None
+        else:
+            progress(0.45, desc="Step 3/5: Split F0 Maschile/Femminile...")
+            yield log("[STEP 3/5] Analisi F0 + split Maschile/Femminile con crossfade 100ms..."), None
+            female_intervals, male_med, female_med = split_vocals_by_f0(
+                vocals_wav, male_wav, female_wav, fade_ms=100
+            )
+            yield log(
+                f"[STEP 3/5] Split completato: {len(female_intervals)} segmenti femminili "
+                f"(F0 globale={male_med:.1f} Hz, F0 femminile={female_med:.1f} Hz)"
+            ), None
+
+        progress(0.60, desc="Step 4/5: Inferenza RVC Voce Principale...")
         p1, p1_desc = resolve_pitch(pitch1_mode, pitch1_manual, male_wav, voice1_label)
         yield log(f"[STEP 4A/5] RVC Voce Principale ({voice1_label}) | Pitch: {p1_desc}"), None
         rvc_out_1 = os.path.join(work_dir, "rvc_voice1.wav")
@@ -2002,10 +2175,10 @@ def generate_cover(
         v2_info = MODEL_REGISTRY[voice2_label]
         rvc_out_2 = os.path.join(work_dir, "rvc_voice2.wav")
         if len(female_intervals) == 0:
-            yield log("[STEP 4B/5] Nessun segmento femminile rilevato: traccia 2 silenziosa."), None
+            yield log("[STEP 4B/5] Nessun segmento rilevato per la Seconda Voce: traccia 2 silenziosa."), None
             AudioSegment.from_wav(female_wav).export(rvc_out_2, format="wav")
         else:
-            progress(0.75, desc="Step 4/5: Inferenza RVC Seconda Voce (traccia femminile)...")
+            progress(0.75, desc="Step 4/5: Inferenza RVC Seconda Voce...")
             p2, p2_desc = resolve_pitch(pitch2_mode, pitch2_manual, female_wav, voice2_label)
             yield log(f"[STEP 4B/5] RVC Seconda Voce ({voice2_label}) | Pitch: {p2_desc}"), None
             msg2, _ = run_rvc_active_only(
@@ -2938,7 +3111,7 @@ SIDEBAR_HTML = f"""
 <ul class="sidebar-list">
     <li>1. incolla un titolo/url youtube o carica un file locale (mp3, mp4, wav).</li>
     <li>2. <code>demucs</code> separa voce e base strumentale.</li>
-    <li>3. in duetto, <code>pyworld</code> divide voce maschile e femminile via F0.</li>
+    <li>3. in duetto puoi dividere uomo/donna via F0 oppure 2 voci dello stesso genere via timbro.</li>
     <li>4. <code>rvc v2 (rmvpe)</code> converte il timbro (scarica nuove voci da HF, Voice-Models, GitHub o URL diretto).</li>
     <li>5. <code>pedalboard</code> + <code>ffmpeg</code> mixano in mp3 320 kbps, pronti nel lettore MP3 qui sopra.</li>
 </ul>
@@ -3018,7 +3191,11 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                     )
 
                     mode_radio = gr.Radio(
-                        choices=["Voce Singola", "Duetto (Split Maschile / Femminile via F0)"],
+                        choices=[
+                            "Voce Singola",
+                            "Duetto (Uomo / Donna via F0)",
+                            "Duetto Stesso Genere (2 Uomini o 2 Donne via Timbro)",
+                        ],
                         value="Voce Singola",
                         label="Modalita",
                     )

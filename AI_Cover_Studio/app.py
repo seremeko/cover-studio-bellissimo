@@ -2141,6 +2141,7 @@ YORU_SPRITE_URI = _load_data_uri("sprite_yoru.png", "image/png")
 ASA_SPRITE_URI = _load_data_uri("sprite_asa.png", "image/png")
 TETO_SPRITE_URI = _load_data_uri("sprite_teto.png", "image/png")
 RIKA_NIPAH_URI = _load_data_uri("rika_nipah.mp3", "audio/mpeg")
+BOW_EASTER_URI = _load_data_uri("bow_easter_egg.mp3", "audio/mpeg")
 
 CUSTOM_CSS = f"""
 @keyframes sprite-hop {{
@@ -2910,7 +2911,7 @@ HEADER_HTML = """
         <p class="journal-subtitle">little vocaloid covers, rvc v2 models, and cozy mixes.</p>
     </div>
     <div class="journal-header-right">
-        <svg width="54" height="44" viewBox="0 0 54 44" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <svg id="header-bow-easter" width="54" height="44" viewBox="0 0 54 44" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
             <path d="M26 19 C16 6, 4 8, 5 20 C6 30, 18 26, 26 21 Z" fill="#ffd1e3" stroke="#e88ab0" stroke-width="2"/>
             <path d="M28 19 C38 6, 50 8, 49 20 C48 30, 36 26, 28 21 Z" fill="#ffd1e3" stroke="#e88ab0" stroke-width="2"/>
             <path d="M24 23 L14 41 L21 38 L26 24 Z" fill="#ffb8d4" stroke="#e88ab0" stroke-width="1.8"/>
@@ -3752,6 +3753,20 @@ FORCE_LIGHT_HEAD = """
     let tabsResized = false;
     function initAllPets() {
         initKawaiiIpod();
+        const bowEl = document.getElementById('header-bow-easter');
+        if (bowEl && bowEl.dataset.bound !== '1') {
+            bowEl.dataset.bound = '1';
+            let bowAudio = null;
+            bowEl.addEventListener('click', () => {
+                if (!window.__BOW_EASTER_URI) return;
+                if (!bowAudio) {
+                    bowAudio = new Audio(window.__BOW_EASTER_URI);
+                    bowAudio.volume = 0.85;
+                }
+                bowAudio.currentTime = 0;
+                bowAudio.play().catch(() => {});
+            });
+        }
         if (!tabsResized && document.querySelector('.journal-main .tab-nav, .journal-main [role="tablist"]')) {
             tabsResized = true;
             setTimeout(() => window.dispatchEvent(new Event('resize')), 150);
@@ -3774,7 +3789,11 @@ FORCE_LIGHT_HEAD = """
 """
 
 if __name__ == "__main__":
-    head_html = f'<script>window.__RIKA_NIPAH_URI = "{RIKA_NIPAH_URI}";</script>' + FORCE_LIGHT_HEAD
+    head_html = (
+        f'<script>window.__RIKA_NIPAH_URI = "{RIKA_NIPAH_URI}";'
+        f'window.__BOW_EASTER_URI = "{BOW_EASTER_URI}";</script>'
+        + FORCE_LIGHT_HEAD
+    )
     demo.queue().launch(
         inbrowser=True,
         css=CUSTOM_CSS,

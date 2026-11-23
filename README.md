@@ -115,7 +115,6 @@ Ogni generazione eseguita da `AI_Cover_Studio/app.py` segue cinque fasi sequenzi
 
 L'interfaccia Web in Gradio e strutturata come un blog/journal dei primi anni 2000:
 
-- **Tema chiaro forzato**: blocco della modalita scura via CSS (`:root, .dark` con `color-scheme: light`) e script JavaScript nel `<head>` che rimuove qualsiasi classe `.dark` da `<html>` e `<body>`.
 - **Sfondo pixel art**: cielo pastello con nuvole e cityscape pixelato (`assets/bg_sky.png`) visibile dietro al contenitore trasparente.
 - **Lettore MP3 pixel art (colonna sinistra)**: widget compatto posizionato sopra la sidebar informativa, con ciondolo a cuoricino pixelato, CD olografico rotante, barra di avanzamento a 14 tacche cliccabile, pulsanti `<<`, Play/Pausa, `>>`, controllo volume (`VOL` con slider `0-100%`) e menu a tre linee per sfogliare tutte le cover/TTS e scaricarle singolarmente. Si aggiorna automaticamente al termine di ogni nuova generazione.
 - **Sidebar guida di Meko**: pannello sinistro sotto il player con le sezioni `ABOUT`, `HOW IT WORKS`, `MADE WITH` e `STATUS` (conteggio dei modelli locali pronti).

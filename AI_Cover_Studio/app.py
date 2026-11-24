@@ -802,8 +802,7 @@ def search_rvc_models(character_name: str, progress=gr.Progress()):
     logs = []
 
     def log(msg: str):
-        logs.append(msg)
-        return "\n".join(logs)
+        return _append_log_html(logs, msg)
 
     query_raw = (character_name or "").strip()
     if not query_raw:
@@ -1038,8 +1037,7 @@ def confirm_download_model(
     logs = []
 
     def log(msg: str):
-        logs.append(msg)
-        return "\n".join(logs)
+        return _append_log_html(logs, msg)
 
     if not selected_label or not candidates_state or selected_label not in candidates_state:
         yield log("[ERRORE] Seleziona prima un modello dalla lista."), gr.update(), gr.update()
@@ -1121,8 +1119,7 @@ def install_from_direct_url(direct_url: str, custom_name: str, progress=gr.Progr
     logs = []
 
     def log(msg: str):
-        logs.append(msg)
-        return "\n".join(logs)
+        return _append_log_html(logs, msg)
 
     url = (direct_url or "").strip()
     if not url.startswith(("http://", "https://")):
@@ -1404,34 +1401,47 @@ def _format_diag_md(
     )
 
 
-def _render_console_html(lines: list[str]) -> str:
+def _is_error_line(line: str) -> bool:
+    low = line.lower()
     err_tokens = (
-        "[ERRORE",
-        "ERROR:",
-        "Error:",
-        "Exception:",
-        "Traceback",
-        "RuntimeError",
-        "ModuleNotFoundError",
-        "FileNotFoundError",
-        "OSError",
-        "ValueError",
-        "KeyError",
-        "CUDA out of memory",
+        "[errore",
+        "errore:",
+        "error:",
+        "exception:",
+        "traceback",
+        "runtimeerror",
+        "modulenotfounderror",
+        "filenotfounderror",
+        "oserror",
+        "valueerror",
+        "keyerror",
+        "cuda out of memory",
+        "fallito",
         "failed",
     )
+    return any(tok in low for tok in err_tokens)
+
+
+def _render_console_html(lines: list[str]) -> str:
     out = ['<div class="journal-log-html">']
     for ln in lines[-140:]:
         esc = html.escape(ln)
-        if any(tok in ln for tok in err_tokens):
+        if _is_error_line(ln):
             out.append(
                 f'<div style="color:#b71c1c;background:#ffebee;font-weight:bold;'
-                f'padding:1px 4px;border-left:3px solid #d32f2f;margin:1px 0;">{esc}</div>'
+                f'padding:2px 5px;border-left:3px solid #d32f2f;margin:1px 0;">{esc}</div>'
             )
         else:
             out.append(f'<div style="color:#7a345a;">{esc}</div>')
     out.append("</div>")
     return "".join(out)
+
+
+def _append_log_html(logs: list[str], msg: str) -> str:
+    logs.append(msg)
+    if _is_error_line(msg):
+        print(f"\033[91m{msg}\033[0m", flush=True)
+    return _render_console_html(logs)
 
 
 def train_rvc_voice(
@@ -1452,8 +1462,7 @@ def train_rvc_voice(
     t_start = time.time()
 
     def log(msg: str):
-        logs.append(msg)
-        return _render_console_html(logs)
+        return _append_log_html(logs, msg)
 
     safe_name = sanitize_name((model_name or "").strip(), default="")
     if not safe_name:
@@ -1875,8 +1884,7 @@ def generate_tts_rvc(
     logs = []
 
     def log(msg: str):
-        logs.append(msg)
-        return "\n".join(logs)
+        return _append_log_html(logs, msg)
 
     clean_text = (text or "").strip()
     if not clean_text:
@@ -1979,8 +1987,7 @@ def generate_cover(
     logs = []
 
     def log(msg: str):
-        logs.append(msg)
-        return "\n".join(logs)
+        return _append_log_html(logs, msg)
 
     has_local_file = bool(local_file_path and os.path.exists(local_file_path))
     song_query = (song_input or "").strip()
@@ -3259,11 +3266,8 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
 
                     generate_btn = gr.Button("Genera Cover", variant="primary", size="lg")
 
-                    log_box = gr.Textbox(
-                        label="Log di Avanzamento",
-                        lines=11,
-                        interactive=False,
-                        elem_classes=["journal-log"],
+                    log_box = gr.HTML(
+                        value='<div class="journal-log-html"><div style="color:#8f5c7a;">Console pronta...</div></div>',
                     )
                     audio_out = gr.Audio(
                         label="Cover Finale (MP3 320 kbps)",
@@ -3316,11 +3320,8 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                             )
                         direct_download_btn = gr.Button("Scarica da URL Diretto", variant="secondary")
 
-                        hf_log_box = gr.Textbox(
-                            label="Stato Ricerca e Download",
-                            lines=9,
-                            interactive=False,
-                            elem_classes=["journal-log"],
+                        hf_log_box = gr.HTML(
+                            value='<div class="journal-log-html"><div style="color:#8f5c7a;">Pronto per la ricerca voci...</div></div>',
                         )
 
                 # TAB 3: Crea Voce (Training RVC v2)
@@ -3456,11 +3457,8 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
                                 label="Index Rate",
                             )
                         tts_btn = gr.Button("Genera Parlato RVC", variant="primary")
-                        tts_log_box = gr.Textbox(
-                            label="Log Text to Speech",
-                            lines=6,
-                            interactive=False,
-                            elem_classes=["journal-log"],
+                        tts_log_box = gr.HTML(
+                            value='<div class="journal-log-html"><div style="color:#8f5c7a;">Console TTS pronta...</div></div>',
                         )
                         tts_audio_out = gr.Audio(
                             label="Audio TTS Finale (MP3 320 kbps)",
@@ -3550,6 +3548,7 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
             voice1_dd,
             voice2_dd,
         ],
+        show_progress="hidden",
     )
 
     tts_btn.click(
@@ -3568,6 +3567,7 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
         fn=refresh_ipod_player,
         inputs=[],
         outputs=[ipod_player_html],
+        show_progress="hidden",
     )
 
     tts_tab.select(
@@ -3967,6 +3967,9 @@ FORCE_LIGHT_HEAD = """
     let tabsResized = false;
     function initAllPets() {
         initKawaiiIpod();
+        document.querySelectorAll('.journal-log-html').forEach((el) => {
+            el.scrollTop = el.scrollHeight;
+        });
         const bowEl = document.getElementById('header-bow-easter');
         if (bowEl && bowEl.dataset.bound !== '1') {
             bowEl.dataset.bound = '1';
@@ -4003,6 +4006,8 @@ FORCE_LIGHT_HEAD = """
 """
 
 if __name__ == "__main__":
+    if os.name == "nt":
+        os.system("")
     head_html = (
         f'<script>window.__RIKA_NIPAH_URI = "{RIKA_NIPAH_URI}";'
         f'window.__BOW_EASTER_URI = "{BOW_EASTER_URI}";</script>'

@@ -3808,123 +3808,160 @@ FORCE_LIGHT_HEAD = """
         requestAnimationFrame(tick);
     }
 
+    let ipodDelegatedBound = false;
     function initKawaiiIpod() {
         document.querySelectorAll('.kawaii-ipod').forEach((ipod) => {
-            if (ipod.dataset.bound === '1') return;
-            ipod.dataset.bound = '1';
             const audio = ipod.querySelector('.ipod-audio');
-            const titleEl = ipod.querySelector('.ipod-track-title');
-            const timeEl = ipod.querySelector('.ipod-time');
-            const playBtns = ipod.querySelectorAll('.ipod-play');
-            const prevBtns = ipod.querySelectorAll('.ipod-prev');
-            const nextBtns = ipod.querySelectorAll('.ipod-next');
-            const menuBtn = ipod.querySelector('.ipod-menu');
-            const menuList = ipod.querySelector('.ipod-menu-list');
-            const dlLink = ipod.querySelector('.ipod-dl');
-            const volBtn = ipod.querySelector('.ipod-vol-btn');
-            const volRow = ipod.querySelector('.ipod-vol-row');
             const volSlider = ipod.querySelector('.ipod-vol-slider');
-            const volPct = ipod.querySelector('.ipod-vol-pct');
-            const segs = Array.from(ipod.querySelectorAll('.ipod-seg'));
-            const progBar = ipod.querySelector('.ipod-progress');
-
-            let tracks = [];
-            try { tracks = JSON.parse(ipod.dataset.tracks || '[]'); } catch (e) {}
-            let idx = parseInt(ipod.dataset.idx || '0', 10) || 0;
-            audio.volume = 0.85;
-
-            function fmt(s) {
-                if (!isFinite(s)) return '0:00';
-                const m = Math.floor(s / 60);
-                const sec = Math.floor(s % 60);
-                return m + ':' + String(sec).padStart(2, '0');
-            }
-
-            function loadIdx(newIdx, autoPlay) {
-                if (!tracks.length) return;
-                idx = (newIdx + tracks.length) % tracks.length;
-                const tr = tracks[idx];
-                titleEl.textContent = tr.title;
-                titleEl.title = tr.title;
-                audio.src = tr.url;
-                if (dlLink) {
-                    dlLink.href = tr.url;
-                    dlLink.download = tr.title;
-                }
-                if (autoPlay) {
-                    audio.play().catch(() => {});
-                }
-            }
-
-            function togglePlay() {
-                if (!audio.src) return;
-                if (audio.paused) {
-                    audio.play().catch(() => {});
-                } else {
-                    audio.pause();
-                }
-            }
-
-            playBtns.forEach((b) => b.addEventListener('click', togglePlay));
-            prevBtns.forEach((b) => b.addEventListener('click', () => loadIdx(idx - 1, true)));
-            nextBtns.forEach((b) => b.addEventListener('click', () => loadIdx(idx + 1, true)));
-            if (menuBtn && menuList) {
-                menuBtn.addEventListener('click', () => {
-                    menuList.style.display = menuList.style.display === 'none' ? 'block' : 'none';
-                });
-                menuList.querySelectorAll('.ipod-menu-title[data-idx]').forEach((item) => {
-                    item.addEventListener('click', () => {
-                        const i = parseInt(item.dataset.idx || '0', 10);
-                        loadIdx(i, true);
-                        menuList.style.display = 'none';
-                    });
-                });
-            }
-            if (volBtn && volRow) {
-                volBtn.addEventListener('click', () => {
-                    volRow.style.display = volRow.style.display === 'none' ? 'flex' : 'none';
-                });
-            }
-            if (volSlider && volPct) {
-                volSlider.addEventListener('input', () => {
-                    const v = parseFloat(volSlider.value);
-                    audio.volume = v;
-                    volPct.textContent = Math.round(v * 100) + '%';
-                });
-            }
-
-            const PLAY_SVG = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><polygon points="2,1 9,5 2,9" fill="currentColor"/></svg>';
-            const PAUSE_SVG = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="2" y="1" width="2.5" height="8" fill="currentColor"/><rect x="5.5" y="1" width="2.5" height="8" fill="currentColor"/></svg>';
-            audio.addEventListener('play', () => {
-                ipod.classList.add('playing');
-                const btn = ipod.querySelector('.ipod-mini-btns .ipod-play');
-                if (btn) btn.innerHTML = PAUSE_SVG;
-            });
-            audio.addEventListener('pause', () => {
-                ipod.classList.remove('playing');
-                const btn = ipod.querySelector('.ipod-mini-btns .ipod-play');
-                if (btn) btn.innerHTML = PLAY_SVG;
-            });
-            audio.addEventListener('ended', () => loadIdx(idx + 1, true));
-            audio.addEventListener('timeupdate', () => {
-                const dur = audio.duration || 0;
-                const cur = audio.currentTime || 0;
-                timeEl.textContent = fmt(cur) + ' / ' + fmt(dur);
-                const ratio = dur > 0 ? cur / dur : 0;
-                const lit = Math.round(ratio * segs.length);
-                segs.forEach((sg, i) => sg.classList.toggle('filled', i < lit));
-            });
-
-            if (progBar) {
-                progBar.addEventListener('click', (e) => {
-                    const dur = audio.duration || 0;
-                    if (dur <= 0) return;
-                    const rect = progBar.getBoundingClientRect();
-                    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                    audio.currentTime = ratio * dur;
-                });
+            if (audio && volSlider && audio.dataset.volInit !== '1') {
+                audio.dataset.volInit = '1';
+                audio.volume = parseFloat(volSlider.value || '0.85');
             }
         });
+
+        if (ipodDelegatedBound) return;
+        ipodDelegatedBound = true;
+
+        const PLAY_SVG = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><polygon points="2,1 9,5 2,9" fill="currentColor"/></svg>';
+        const PAUSE_SVG = '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="2" y="1" width="2.5" height="8" fill="currentColor"/><rect x="5.5" y="1" width="2.5" height="8" fill="currentColor"/></svg>';
+
+        function fmt(s) {
+            if (!isFinite(s)) return '0:00';
+            const m = Math.floor(s / 60);
+            const sec = Math.floor(s % 60);
+            return m + ':' + String(sec).padStart(2, '0');
+        }
+
+        function getTracks(ipod) {
+            try { return JSON.parse(ipod.dataset.tracks || '[]'); } catch (e) { return []; }
+        }
+
+        function loadIdx(ipod, newIdx, autoPlay) {
+            const tracks = getTracks(ipod);
+            if (!tracks.length) return;
+            const idx = ((newIdx % tracks.length) + tracks.length) % tracks.length;
+            ipod.dataset.idx = String(idx);
+            const tr = tracks[idx];
+            const titleEl = ipod.querySelector('.ipod-track-title');
+            const audio = ipod.querySelector('.ipod-audio');
+            const dlLink = ipod.querySelector('.ipod-dl');
+            if (titleEl) {
+                titleEl.textContent = tr.title;
+                titleEl.title = tr.title;
+            }
+            if (audio) {
+                audio.src = tr.url;
+                if (autoPlay) audio.play().catch(() => {});
+            }
+            if (dlLink) {
+                dlLink.href = tr.url;
+                dlLink.download = tr.title;
+            }
+        }
+
+        document.addEventListener('click', (e) => {
+            const ipod = e.target.closest('.kawaii-ipod');
+            if (!ipod) return;
+            const audio = ipod.querySelector('.ipod-audio');
+            const idx = parseInt(ipod.dataset.idx || '0', 10) || 0;
+
+            if (e.target.closest('.ipod-play')) {
+                if (audio && audio.src) {
+                    if (audio.paused) audio.play().catch(() => {});
+                    else audio.pause();
+                }
+                return;
+            }
+            if (e.target.closest('.ipod-prev')) {
+                loadIdx(ipod, idx - 1, true);
+                return;
+            }
+            if (e.target.closest('.ipod-next')) {
+                loadIdx(ipod, idx + 1, true);
+                return;
+            }
+            if (e.target.closest('.ipod-menu')) {
+                const menuList = ipod.querySelector('.ipod-menu-list');
+                if (menuList) {
+                    menuList.style.display = menuList.style.display === 'none' ? 'block' : 'none';
+                }
+                return;
+            }
+            const menuItem = e.target.closest('.ipod-menu-title[data-idx]');
+            if (menuItem) {
+                const i = parseInt(menuItem.dataset.idx || '0', 10);
+                loadIdx(ipod, i, true);
+                const menuList = ipod.querySelector('.ipod-menu-list');
+                if (menuList) menuList.style.display = 'none';
+                return;
+            }
+            if (e.target.closest('.ipod-vol-btn')) {
+                const volRow = ipod.querySelector('.ipod-vol-row');
+                if (volRow) {
+                    volRow.style.display = volRow.style.display === 'none' ? 'flex' : 'none';
+                }
+                return;
+            }
+            const progBar = e.target.closest('.ipod-progress');
+            if (progBar && audio) {
+                const dur = audio.duration || 0;
+                if (dur <= 0) return;
+                const rect = progBar.getBoundingClientRect();
+                const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                audio.currentTime = ratio * dur;
+            }
+        });
+
+        document.addEventListener('input', (e) => {
+            if (!e.target.matches('.ipod-vol-slider')) return;
+            const ipod = e.target.closest('.kawaii-ipod');
+            if (!ipod) return;
+            const audio = ipod.querySelector('.ipod-audio');
+            const volPct = ipod.querySelector('.ipod-vol-pct');
+            const v = parseFloat(e.target.value);
+            if (audio) audio.volume = v;
+            if (volPct) volPct.textContent = Math.round(v * 100) + '%';
+        });
+
+        document.addEventListener('play', (e) => {
+            if (!e.target.matches('.ipod-audio')) return;
+            const ipod = e.target.closest('.kawaii-ipod');
+            if (!ipod) return;
+            ipod.classList.add('playing');
+            const btn = ipod.querySelector('.ipod-mini-btns .ipod-play');
+            if (btn) btn.innerHTML = PAUSE_SVG;
+        }, true);
+
+        document.addEventListener('pause', (e) => {
+            if (!e.target.matches('.ipod-audio')) return;
+            const ipod = e.target.closest('.kawaii-ipod');
+            if (!ipod) return;
+            ipod.classList.remove('playing');
+            const btn = ipod.querySelector('.ipod-mini-btns .ipod-play');
+            if (btn) btn.innerHTML = PLAY_SVG;
+        }, true);
+
+        document.addEventListener('ended', (e) => {
+            if (!e.target.matches('.ipod-audio')) return;
+            const ipod = e.target.closest('.kawaii-ipod');
+            if (!ipod) return;
+            const idx = parseInt(ipod.dataset.idx || '0', 10) || 0;
+            loadIdx(ipod, idx + 1, true);
+        }, true);
+
+        document.addEventListener('timeupdate', (e) => {
+            if (!e.target.matches('.ipod-audio')) return;
+            const ipod = e.target.closest('.kawaii-ipod');
+            if (!ipod) return;
+            const timeEl = ipod.querySelector('.ipod-time');
+            const segs = Array.from(ipod.querySelectorAll('.ipod-seg'));
+            const dur = e.target.duration || 0;
+            const cur = e.target.currentTime || 0;
+            if (timeEl) timeEl.textContent = fmt(cur) + ' / ' + fmt(dur);
+            const ratio = dur > 0 ? cur / dur : 0;
+            const lit = Math.round(ratio * segs.length);
+            segs.forEach((sg, i) => sg.classList.toggle('filled', i < lit));
+        }, true);
     }
 
     let tabsResized = false;

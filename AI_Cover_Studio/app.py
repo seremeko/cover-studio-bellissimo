@@ -3641,6 +3641,8 @@ FORCE_LIGHT_HEAD = """
         let tilt = 0;
         let audioCtx = null;
         let lastSoundTime = 0;
+        let decodedBuffer = null;
+        let decodingStarted = false;
         let preloadedAudio = null;
         if (customAudioUri) {
             preloadedAudio = new Audio(customAudioUri);
@@ -3649,24 +3651,55 @@ FORCE_LIGHT_HEAD = """
             preloadedAudio.load();
         }
 
-        function playGumiImpactSound(intensity) {
-            const nowMs = performance.now();
-            if (nowMs - lastSoundTime < 450) return;
-            lastSoundTime = nowMs;
-            if (preloadedAudio) {
-                try {
-                    preloadedAudio.currentTime = 0;
-                    preloadedAudio.play().catch(() => {});
-                    return;
-                } catch (err) {}
-            }
+        function ensureAudioReady() {
             try {
                 if (!audioCtx) {
                     const Ctx = window.AudioContext || window.webkitAudioContext;
                     if (!Ctx) return;
                     audioCtx = new Ctx();
                 }
-                if (audioCtx.state === 'suspended') audioCtx.resume();
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume().catch(() => {});
+                }
+                if (customAudioUri && !decodingStarted) {
+                    decodingStarted = true;
+                    fetch(customAudioUri)
+                        .then((r) => r.arrayBuffer())
+                        .then((ab) => audioCtx.decodeAudioData(ab))
+                        .then((buf) => { decodedBuffer = buf; })
+                        .catch(() => {});
+                }
+            } catch (err) {}
+        }
+
+        function playGumiImpactSound(intensity) {
+            const nowMs = performance.now();
+            if (nowMs - lastSoundTime < 450) return;
+            lastSoundTime = nowMs;
+            ensureAudioReady();
+            if (customAudioUri) {
+                if (decodedBuffer && audioCtx) {
+                    try {
+                        const src = audioCtx.createBufferSource();
+                        src.buffer = decodedBuffer;
+                        const g = audioCtx.createGain();
+                        g.gain.value = 0.85;
+                        src.connect(g);
+                        g.connect(audioCtx.destination);
+                        src.start(0);
+                        return;
+                    } catch (err) {}
+                }
+                if (preloadedAudio) {
+                    try {
+                        preloadedAudio.currentTime = 0;
+                        preloadedAudio.play().catch(() => {});
+                        return;
+                    } catch (err) {}
+                }
+            }
+            try {
+                if (!audioCtx) return;
 
                 const t = audioCtx.currentTime;
                 const osc = audioCtx.createOscillator();
@@ -3715,6 +3748,7 @@ FORCE_LIGHT_HEAD = """
 
         pet.addEventListener('pointerdown', (e) => {
             e.preventDefault();
+            ensureAudioReady();
             dragging = true;
             movedDuringDrag = false;
             pet.classList.add('dragging');

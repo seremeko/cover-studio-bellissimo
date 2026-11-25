@@ -3500,18 +3500,21 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
         fn=search_rvc_models,
         inputs=[hf_name_input],
         outputs=[hf_log_box, hf_candidates_state, hf_results_dd, hf_confirm_btn],
+        show_progress="hidden",
     )
 
     hf_confirm_btn.click(
         fn=confirm_download_model,
         inputs=[hf_results_dd, hf_candidates_state, hf_name_input],
         outputs=[hf_log_box, voice1_dd, voice2_dd],
+        show_progress="hidden",
     )
 
     direct_download_btn.click(
         fn=install_from_direct_url,
         inputs=[direct_url_input, direct_name_input],
         outputs=[hf_log_box, voice1_dd, voice2_dd],
+        show_progress="hidden",
     )
 
     train_check_ckpt_btn.click(
@@ -3563,6 +3566,7 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
             tts_index_slider,
         ],
         outputs=[tts_log_box, tts_audio_out],
+        show_progress="hidden",
     ).then(
         fn=refresh_ipod_player,
         inputs=[],
@@ -3592,10 +3596,12 @@ with gr.Blocks(title="ai cover studio // kawaii journal") as demo:
             reverb_cb,
         ],
         outputs=[log_box, audio_out],
+        show_progress="hidden",
     ).then(
         fn=refresh_ipod_player,
         inputs=[],
         outputs=[ipod_player_html],
+        show_progress="hidden",
     )
 
 
